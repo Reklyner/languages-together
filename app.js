@@ -22,7 +22,7 @@ let zhVoice = null;
 const pickVoice = () => { const v = speechSynthesis.getVoices();
   zhVoice = v.find(x=>/zh[-_]CN/i.test(x.lang)) || v.find(x=>/^zh/i.test(x.lang)) || null; };
 if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
-function say(text, slow){ if(!('speechSynthesis' in window)) return;
+function say(text, slow){ if(!('speechSynthesis' in window) || (typeof recState!=='undefined' && recState!=='idle')) return;
   speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text);
   u.lang='zh-CN'; if(zhVoice) u.voice=zhVoice; u.rate = slow?0.5:0.9; speechSynthesis.speak(u); }
 let actx;
@@ -36,34 +36,49 @@ const STRIP = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ü
 const CH2PY = {}; WORDS.forEach(w=>{ const sy=w.py.split(' '); if(sy.length===[...w.hz].length) [...w.hz].forEach((c,k)=>CH2PY[c]=STRIP(sy[k])); });
 const toPy = t => [...t].map(c=>CH2PY[c]||NUMPY[c]||c).join('');
 const NUMPY = {'1':'yi','2':'er','3':'san','4':'si','5':'wu','6':'liu','7':'qi','8':'ba','9':'jiu','10':'shi'};
-// One recognizer for the whole session (iOS Safari dislikes re-creating it). State guards stop double taps.
-let rec = null, recState = 'idle', lastTap = 0, cur = null;
-const status = t => { const s=document.getElementById('srstat'); if(s) s.textContent = (t==='starting'||!s.textContent) ? t : s.textContent+' → '+t; };
-function getRec(){
-  if(rec) return rec;
-  rec = new SR(); rec.lang='zh-CN'; rec.maxAlternatives=5; rec.interimResults=false; rec.continuous=false;
-  const H = (ev, f) => rec['on'+ev] = e => { status(ev + (e && e.error ? ': '+e.error : '')); if(cur) f(e); };
-  H('start', () => { recState='listening'; cur.arm(6000); });
-  H('audiostart', () => {}); H('speechstart', () => cur.arm(4000));
-  H('speechend', () => cur.arm(2500));            // unreliable on iOS; timeout is the backstop
-  H('result', e => { const alts=[]; for(const res of e.results) for(const a of res) alts.push(a.transcript.replace(/[\s。，！？、.,!?]/g,''));
-    status('result: '+(alts[0]||'')); cur.finish(alts.some(cur.match), alts[0]||''); });
-  H('nomatch', () => cur.finish(null,'no-speech'));
-  H('error', e => cur.finish(null, e.error));
-  H('end', () => setTimeout(()=>cur && cur.finish(null,'no-speech'), 600)); // ended without a result (iOS with no audio)
-  return rec;
-}
+// Speech recognition, tuned for iPad/iPhone Safari:
+// - fresh recognizer per attempt (reusing one after onend is flaky on iOS)
+// - continuous + interim results; we stop it ourselves on a match, a final result, or silence
+// - if it ends within 1.5s with nothing heard (permission warm-up / busy audio session), auto-restart up to 2 times
+let rec = null, recState = 'idle', lastTap = 0, cur = null, t0 = 0;
+const status = t => { const s=document.getElementById('srstat'); if(!s) return;
+  const line = ((Date.now()-t0)/1000).toFixed(1)+'s '+t; s.textContent = t==='tap' ? line : (s.textContent ? s.textContent+' → ' : '')+line; };
 function listen(w, done){
   const target = STRIP(w.py).replace(/[\s']/g,'');
-  let timer, finished=false;
-  const c = cur = {
-    match: a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || toPy(a).replace(/\d+/g,d=>NUMPY[d]||d).includes(target),
-    arm: ms => { clearTimeout(timer); timer=setTimeout(()=>{ try{rec.stop();}catch(e){} c.finish(null,'no-speech'); }, ms); },
-    finish: (ok, heard) => { if(finished || cur!==c) return; finished=true; clearTimeout(timer); cur=null; recState='idle'; done(ok, heard); } };
+  const match = a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || toPy(a).replace(/\d+/g,d=>NUMPY[d]||d).includes(target);
+  let finished=false, restarts=0, startedAt=0, heardAny=false, last=[], silence, settle;
+  const c = cur = {};
+  const kill = () => { try{ rec && rec.abort(); }catch(e){} };
+  const finish = (ok, heard) => { if(finished || cur!==c) return; finished=true; clearTimeout(silence); clearTimeout(settle);
+    cur=null; recState='idle'; const r=rec; rec=null; if(r){ r.onend=r.onresult=r.onerror=null; try{r.abort();}catch(e){} } done(ok, heard); };
+  c.finish = finish;
+  const judge = () => last.length ? finish(last.some(match), last[0]) : finish(null,'no-speech');
+  const armSilence = ms => { clearTimeout(silence); silence=setTimeout(()=>{ status('timeout'); judge(); }, ms); };
+  function start(){
+    const r = rec = new SR(); r.lang='zh-CN'; r.maxAlternatives=5; r.continuous=true; r.interimResults=true;
+    r.onstart = () => { status('start'); recState='listening'; startedAt=Date.now(); };
+    r.onaudiostart = () => status('audio');
+    r.onspeechstart = () => { status('speech'); heardAny=true; armSilence(5000); };
+    r.onresult = e => { heardAny=true; let fin=false; last=[];
+      for(let k=e.resultIndex;k<e.results.length;k++){ const res=e.results[k]; if(res.isFinal) fin=true;
+        for(const x of res) last.push(x.transcript.replace(/[\s。，！？、.,!?]/g,'')); }
+      status((fin?'final: ':'heard: ')+(last[0]||''));
+      if(last.some(match)) return finish(true, last[0]);
+      if(fin) return finish(false, last[0]);
+      clearTimeout(settle); settle=setTimeout(()=>{ status('settled'); judge(); }, 1500); };   // iOS rarely marks final
+    r.onerror = e => { status('error: '+e.error);
+      if(e.error==='not-allowed'||e.error==='service-not-allowed') finish(null, e.error); };   // others: let onend decide
+    r.onend = () => { status('end'); if(finished || cur!==c || rec!==r) return;
+      const quick = !startedAt || Date.now()-startedAt < 1500;
+      if(!heardAny && quick && restarts<2){ restarts++; status('restart '+restarts); startedAt=0; setTimeout(()=>{ if(cur===c) start(); }, 250); return; }
+      judge(); };
+    try { r.start(); } catch(e){ status('start failed: '+(e.name||e.message)); finish(null,'start-failed'); }
+  }
   recState='starting';
-  if('speechSynthesis' in window) speechSynthesis.cancel();
-  getRec().start();                                // synchronous inside the tap (iOS requirement)
-  c.arm(8000);
+  // Never speak while listening. Cancel any speech, then start synchronously inside the tap (iOS gesture rule);
+  // if the audio session was still busy, the quick-end auto-restart covers it.
+  if('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) { status('tts cancel'); speechSynthesis.cancel(); }
+  start(); armSilence(7000);
 }
 
 // ---- progress / spaced repetition (Leitner boxes) ----
@@ -105,7 +120,7 @@ function themes(next){ header();
   app.querySelectorAll('.theme').forEach(b=>b.onclick=()=>next(b.dataset.id)); }
 const wordsOf = id => id==='all' ? WORDS : WORDS.filter(w=>w.theme===id);
 
-function learn(tid, i=0){ if(cur){ cur=null; recState='idle'; try{rec.abort();}catch(e){} } header(); const ws=wordsOf(tid), w=ws[(i+ws.length)%ws.length]; seen(w.id);
+function learn(tid, i=0){ if(cur) cur.finish(null,'left');  header(); const ws=wordsOf(tid), w=ws[(i+ws.length)%ws.length]; seen(w.id);
   app.innerHTML = `<div class="card"><div class="pic" id="pic">${w.img}</div><div class="py">${pyHTML(w.py)}</div>
    <div class="hz">${w.hz}</div><div class="en">${w.en}</div>
    <div class="row"><button class="big c1" id="n">🔊</button><button class="big c5" id="s">🐢</button>
@@ -120,7 +135,7 @@ function learn(tid, i=0){ if(cur){ cur=null; recState='idle'; try{rec.abort();}c
     if(!SR){ msg.innerHTML=`<button class="big c5" id="ok">🙋 I said it (self-check)</button>`;
       $('#ok').onclick=()=>{ mark(w.id,true); msg.innerHTML='<span class="ok">✔</span>'; header(); }; return; }
     const now=Date.now(); if(now-lastTap<800 || recState!=='idle') return; lastTap=now;
-    mic.classList.add('listening'); mic.innerHTML='🎤 Listening…'; msg.textContent=''; status('starting');
+    mic.classList.add('listening'); mic.innerHTML='🎤 Listening…'; msg.textContent=''; t0=Date.now(); status('tap');
     const reset=()=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Say it'; };
     try { listen(w,(ok,heard)=>{ reset();
       if(ok){ mark(w.id,true); header(); msg.innerHTML=`<span class="ok">✔</span>`; ding(true); }
