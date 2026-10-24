@@ -1,9 +1,14 @@
 const $ = s => document.querySelector(s), app = $('#app');
-const KEY = 'mandarin-family-v1';
-const DEF = {cur:0, profiles:[], prog:{}};
-let S; try { S = JSON.parse(localStorage.getItem(KEY)) || DEF; } catch(e){ S = DEF; }
-S.profiles.forEach((p,i)=>{ S.prog[i] = S.prog[i] || {}; });
-const save = () => localStorage.setItem(KEY, JSON.stringify(S));
+const GUEST_KEY = 'mandarin-family-v1';
+let KEY = GUEST_KEY, S;
+const newId = () => Math.random().toString(36).slice(2,10);
+function load(key){ KEY=key; try { S = JSON.parse(localStorage.getItem(KEY)); } catch(e){ S=null; }
+  S = S || {cur:0, profiles:[], prog:{}}; S.prog = S.prog || {};
+  S.profiles.forEach((p,i)=>{ p.id = p.id || newId(); S.prog[i] = S.prog[i] || {}; }); }
+load(GUEST_KEY);
+const save = () => { localStorage.setItem(KEY, JSON.stringify(S)); window.onLocalSave && window.onLocalSave(); };
+// hooks for sync.js (cloud mode); guest mode needs none of this
+window.App = { get S(){return S;}, set S(v){S=v;}, load, save:()=>localStorage.setItem(KEY, JSON.stringify(S)), home:()=>home(), GUEST_KEY };
 const P = () => S.prog[S.cur];
 const shuffle = a => a.map(x=>[Math.random(),x]).sort((a,b)=>a[0]-b[0]).map(x=>x[1]);
 
@@ -83,7 +88,7 @@ function addPlayer(first){ let av=AVS[8];
   app.querySelectorAll('.av1').forEach(b=>b.onclick=()=>pick(b.dataset.a));
   if($('#cx')) $('#cx').onclick=home;
   $('#ok').onclick=()=>{ const n=$('#nm').value.trim(); if(!n) return $('#nm').focus();
-    S.profiles.push({name:n,av}); S.cur=S.profiles.length-1; S.prog[S.cur]={}; save(); home(); }; }
+    S.profiles.push({name:n,av,id:newId()}); S.cur=S.profiles.length-1; S.prog[S.cur]={}; save(); home(); }; }
 function themes(next){ header();
   app.innerHTML = `<div class="grid">${THEMES.map(t=>`<button class="theme" style="background:${t.color}" data-id="${t.id}">
    <span>${t.icon}</span>${t.name}</button>`).join('')}<button class="theme" style="background:#555" data-id="all"><span>🌈</span>All</button></div>`;
