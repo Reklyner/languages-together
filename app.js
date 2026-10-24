@@ -26,7 +26,12 @@ function say(text, slow){ if(!('speechSynthesis' in window) || (typeof recState!
   speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text);
   u.lang='zh-CN'; if(zhVoice) u.voice=zhVoice; u.rate = slow?0.5:0.9; speechSynthesis.speak(u); }
 let actx;
-function ding(good){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); const o=actx.createOscillator(), g=actx.createGain();
+const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+// Release all app audio so iOS can hand the audio session to the mic.
+function releaseAudio(){ let busy=false;
+  if('speechSynthesis' in window && (speechSynthesis.speaking||speechSynthesis.pending)){ busy=true; speechSynthesis.cancel(); }
+  if(actx){ busy=busy||actx.state==='running'; try{actx.close();}catch(e){} actx=null; } return busy; }
+function ding(good){ if(typeof recState!=='undefined' && recState!=='idle') return; try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); const o=actx.createOscillator(), g=actx.createGain();
   o.connect(g); g.connect(actx.destination); const t=actx.currentTime; o.frequency.setValueAtTime(good?660:300,t); if(good) o.frequency.setValueAtTime(990,t+.12);
   g.gain.setValueAtTime(.2,t); g.gain.exponentialRampToValueAtTime(.001,t+.4); o.start(t); o.stop(t+.4);}catch(e){} }
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -76,6 +81,7 @@ function listen(w, done){
       if(e.error==='not-allowed'||e.error==='service-not-allowed') finish(null, e.error); };   // others: let onend decide
     r.onend = () => { status('end'); if(finished || cur!==c || rec!==r) return;
       const quick = !startedAt || Date.now()-startedAt < 1500;
+      if(!heardAny && quick && IOS){ return finish(null,'cutoff'); }
       if(!heardAny && quick && restarts<2){ restarts++; status('restart '+restarts); startedAt=0; setTimeout(()=>{ if(cur===c) start(); }, 250); return; }
       judge(); };
     status('start() called (cont=off, interim='+(r.interimResults?'on':'off')+')');
@@ -84,8 +90,9 @@ function listen(w, done){
   recState='starting';
   // Never speak while listening. Cancel any speech, then start synchronously inside the tap (iOS gesture rule);
   // if the audio session was still busy, the quick-end auto-restart covers it.
-  if('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) { status('tts cancel'); speechSynthesis.cancel(); }
-  start(); armSilence(7000);
+  const busy = releaseAudio(); if(busy) status('audio released, wait 300ms');
+  armSilence(7000);
+  if(busy) setTimeout(()=>{ if(cur===c) start(); }, 300); else start();
 }
 
 // ---- progress / spaced repetition (Leitner boxes) ----
@@ -149,9 +156,10 @@ function learn(tid, i=0){ if(cur) cur.finish(null,'left');  header(); const ws=w
       else if(ok===false){ msg.innerHTML=`<span class="no">Try again</span><div class="en">heard: ${heard}</div>`; ding(false); setTimeout(()=>say(w.hz,true),400); }
       else msg.innerHTML = heard==='not-allowed'||heard==='service-not-allowed'
         ? `<span class="no">Microphone blocked: allow it in Settings › Safari › Microphone</span>`
+        : heard==='cutoff' ? `<span class="no">Mic was cut off: check Siri is on, then tap again</span>`
         : `<span class="no">Didn't hear you, tap 🎤 to try again</span>`; }); }
     catch(e){ recState='idle'; cur=null; reset(); status('start failed: '+(e.name||e.message)); msg.innerHTML=`<span class="no">Didn't hear you, tap 🎤 to try again</span>`; } };
-  say(w.hz); }
+  if(!IOS) say(w.hz); }
 
 function pickQ(ws){ const now=Date.now(), P0=P();
   const due = ws.filter(w=>!P0[w.id] || P0[w.id].due<=now);
@@ -164,7 +172,7 @@ function quiz(ws, onAnswer, extra=''){ const {w,opts}=pickQ(ws);
   app.innerHTML = `${extra}<div class="row"><button class="big c1" id="n">🔊</button><button class="big c5" id="s">🐢</button></div>
    <div class="grid">${opts.map(o=>`<button class="choice" data-id="${o.id}">${o.img}</button>`).join('')}</div>
    <div class="msg" id="msg"></div>`;
-  $('#n').onclick=()=>say(w.hz); $('#s').onclick=()=>say(w.hz,true); say(w.hz);
+  $('#n').onclick=()=>say(w.hz); $('#s').onclick=()=>say(w.hz,true); if(!IOS) say(w.hz);
   let done=false;
   app.querySelectorAll('.choice').forEach(b=>b.onclick=()=>{ if(done) return; done=true; const ok=b.dataset.id===w.id;
     b.classList.add(ok?'right':'wrong'); app.querySelector(`[data-id="${w.id}"]`).classList.add('right');
