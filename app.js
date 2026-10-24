@@ -3,13 +3,21 @@ const GUEST_KEY = 'mandarin-family-v1';
 let KEY = GUEST_KEY, S;
 const newId = () => Math.random().toString(36).slice(2,10);
 function load(key){ KEY=key; try { S = JSON.parse(localStorage.getItem(KEY)); } catch(e){ S=null; }
-  S = S || {cur:0, profiles:[], prog:{}}; S.prog = S.prog || {};
-  S.profiles.forEach((p,i)=>{ p.id = p.id || newId(); S.prog[i] = S.prog[i] || {}; }); }
+  S = S || {cur:0, profiles:[], prog:{}}; S.prog = S.prog || {}; fixProg(); }
+// progress is keyed by profile id: S.prog[pid] = {w:{wordId:{say:{box,due},hear:{box,due}}}, passed:{}, boss:{}}
+function fixProg(){ const old=S.prog, np={}, curP=S.profiles[S.cur];
+  S.profiles.forEach(p=>{ p.id = p.id || newId(); });
+  const conv = o => { if(!o || o.w) return o; const w={}; for(const k in o) w[k] = o[k].say||o[k].hear ? o[k] : {say:{box:o[k].box||0,due:o[k].due||0}}; return {w}; };
+  const legacy = Object.keys(old).some(k=>/^\d+$/.test(k) && !S.profiles.some(p=>p.id===k));
+  S.profiles.forEach((p,i)=>{ np[p.id] = conv(old[p.id]) || (legacy && p===curP ? conv(old[i]) : null) || {w:{}};
+    if(legacy && p!==curP) np[p.id]={w:{}};   // old progress was shared: give it to the current user only
+    np[p.id].w=np[p.id].w||{}; np[p.id].passed=np[p.id].passed||{}; np[p.id].boss=np[p.id].boss||{}; });
+  S.prog = np; }
 load(GUEST_KEY);
 const save = () => { localStorage.setItem(KEY, JSON.stringify(S)); window.onLocalSave && window.onLocalSave(); };
 // hooks for sync.js (cloud mode); guest mode needs none of this
-window.App = { get S(){return S;}, set S(v){S=v;}, load, save:()=>localStorage.setItem(KEY, JSON.stringify(S)), home:()=>home(), GUEST_KEY };
-const P = () => S.prog[S.cur];
+window.App = { get S(){return S;}, set S(v){S=v; fixProg();}, load, save:()=>localStorage.setItem(KEY, JSON.stringify(S)), home:()=>home(), GUEST_KEY };
+const P = () => { const p=S.profiles[S.cur]; return p ? (S.prog[p.id] = S.prog[p.id] || {w:{},passed:{},boss:{}}) : {w:{},passed:{},boss:{}}; };
 const shuffle = a => a.map(x=>[Math.random(),x]).sort((a,b)=>a[0]-b[0]).map(x=>x[1]);
 
 // ---- tones ----
@@ -95,29 +103,41 @@ function listen(w, done){
   if(busy) setTimeout(()=>{ if(cur===c) start(); }, 300); else start();
 }
 
-// ---- progress / spaced repetition (Leitner boxes) ----
+// ---- progress: stars per word per direction ('say' | 'hear'), spaced repetition ----
 const GAP = [0, 1, 5, 30, 180, 1440, 4320]; // minutes per box
-function mark(id, ok){ const p = P()[id] || {box:0,due:0,seen:1};
-  p.box = ok ? Math.min(p.box+1, GAP.length-1) : 0; p.due = Date.now()+GAP[p.box]*60000; P()[id]=p; save(); }
-function seen(id){ if(!P()[id]){ P()[id]={box:0,due:0,seen:1}; save(); } }
-const stars = () => Object.values(P()).filter(p=>p.box>=3).length;
+const rec0 = (id,d) => ((P().w[id]||{})[d]) || {box:0,due:0};
+function mark(id, d, ok){ const w = P().w[id] = P().w[id] || {}, p = w[d] || {box:0,due:0};
+  p.box = ok ? Math.min(p.box+1, GAP.length-1) : Math.max(0, p.box-1); p.due = Date.now()+GAP[p.box]*60000; w[d]=p; save(); }
+function seen(){}
+const star = (id,d) => Math.min(3, rec0(id,d).box);
+const stars = () => Object.values(P().w).reduce((n,w)=>n+Math.min(3,(w.say||{}).box||0)+Math.min(3,(w.hear||{}).box||0),0);
+const EXPLAIN = 'Stars: 1 per correct answer in Practice, 3 = mastered; a miss drops one.';
+const LEVELS = [...new Set(THEMES.map(t=>t.level||1))];
+const topicPct = t => { const ws=wordsOf(t.id); return Math.round(100*ws.filter(w=>star(w.id,'say')>=2&&star(w.id,'hear')>=2).length/ws.length); };
+const levelReady = L => THEMES.filter(t=>(t.level||1)===L).every(t=>topicPct(t)>=80);
+const curLevel = () => LEVELS.find(L=>!P().passed[L]) || LEVELS[LEVELS.length-1];
+// practice pool: topic words + ~25% review from earlier levels
+function withReview(ws){ const L=curLevel(), old=WORDS.filter(w=>(w.level||1)<L); if(!old.length) return ws;
+  return ws.concat(shuffle(old).slice(0, Math.ceil(ws.length/3))); }
 
 // ---- screens ----
-function header(){ const p=S.profiles[S.cur]; if(!p){ $('#who').textContent=''; return; } $('#who').textContent = p.av+' ⭐'+stars(); }
-function home(){ if(!window.signedIn) return window.showSignIn && window.showSignIn(); if(!S.profiles.length) return addPlayer(true); header();
+function header(){ const p=S.profiles[S.cur]; if(!p){ $('#who').textContent=''; return; } $('#who').textContent = p.av+' ⭐'+stars(); $('#who').title=EXPLAIN; }
+function home(){ if(cur) cur.finish(null,'left'); stopGame(); if(!window.signedIn) return window.showSignIn && window.showSignIn(); if(!S.profiles.length) return addPlayer(true); header();
   app.innerHTML = `<div class="row">${S.profiles.map((p,i)=>`<button class="prof ${i==S.cur?'on':''}" data-i="${i}">
     <span class="av">${p.av}</span><input value="${p.name}" data-i="${i}" aria-label="name"><span class="del" data-i="${i}">✖</span></button>`).join('')}
    <button class="prof add" id="add"><span class="av">➕</span>Add user</button></div>
-   <div class="row"><button class="big c1" id="mLearn">📚 Learn</button><button class="big c2" id="mPrac">🎯 Practice</button>
-   <button class="big c3" id="mPlay">👨‍👧‍👧 Play Together</button></div>`;
+   <div class="row"><button class="big c1" id="mLearn">📚 Learn</button><button class="big c2" id="mPrac">🎯 Practice (say)</button>
+   <button class="big c5" id="mHear">👂 Listen &amp; tap</button><button class="big c3" id="mPlay">👨‍👧‍👧 Play Together</button>
+   <button class="big c4" id="mLvl">🏆 Level ${curLevel()}</button></div><p class="note">${EXPLAIN}</p>`;
   app.querySelectorAll('.prof').forEach(b=>b.onclick=e=>{ if(e.target.tagName==='INPUT') return; S.cur=+b.dataset.i; save(); home(); });
   app.querySelectorAll('.del').forEach(d=>d.onclick=e=>{ e.stopPropagation(); const i=+d.dataset.i;
-        if(!confirm('Delete '+S.profiles[i].name+' and their progress?')) return;
-    S.profiles.splice(i,1); const np={}; S.profiles.forEach((_,k)=>np[k]=S.prog[k<i?k:k+1]||{}); S.prog=np;
+    if(!confirm('Delete '+S.profiles[i].name+' and their progress?')) return;
+    delete S.prog[S.profiles[i].id]; S.profiles.splice(i,1);
     S.cur=Math.max(0,Math.min(S.cur>i?S.cur-1:S.cur, S.profiles.length-1)); save(); home(); });
   $('#add').onclick=()=>addPlayer();
   app.querySelectorAll('.prof input').forEach(inp=>inp.onchange=()=>{ S.profiles[inp.dataset.i].name=inp.value.trim()||'?'; save(); });
-  $('#mLearn').onclick=()=>themes(learn); $('#mPrac').onclick=()=>themes(practice); $('#mPlay').onclick=()=>themes(playSetup); }
+  $('#mLearn').onclick=()=>themes(learn); $('#mPrac').onclick=()=>themes(practice); $('#mHear').onclick=()=>themes(hearTap);
+  $('#mPlay').onclick=()=>themes(playSetup); $('#mLvl').onclick=level; }
 const AVS=['🧔','👩','👧','👦','👶','🧒','👴','👵','🐼','🐯','🐰','🦄','🐶','🐱','🦊','🐸'];
 function addPlayer(first){ let av=AVS[8];
   app.innerHTML=`<div class="card"><h2>${first?'👋 Welcome! Add a user to start':'New user'}</h2><input id="nm" class="nm" placeholder="Name" maxlength="16">
@@ -127,14 +147,32 @@ function addPlayer(first){ let av=AVS[8];
   app.querySelectorAll('.av1').forEach(b=>b.onclick=()=>pick(b.dataset.a));
   if($('#cx')) $('#cx').onclick=home;
   $('#ok').onclick=()=>{ const n=$('#nm').value.trim(); if(!n) return $('#nm').focus();
-    S.profiles.push({name:n,av,id:newId()}); S.cur=S.profiles.length-1; S.prog[S.cur]={}; save(); home(); }; }
-function themes(next){ header();
-  app.innerHTML = `<div class="grid">${THEMES.map(t=>`<button class="theme" style="background:${t.color}" data-id="${t.id}">
-   <span>${t.icon}</span>${t.name}</button>`).join('')}<button class="theme" style="background:#555" data-id="all"><span>🌈</span>All</button></div>`;
+    const id=newId(); S.profiles.push({name:n,av,id}); S.cur=S.profiles.length-1; S.prog[id]={w:{},passed:{},boss:{}}; save(); home(); }; }
+function themes(next){ header(); const L=curLevel();
+  app.innerHTML = `<div class="grid">${THEMES.filter(t=>(t.level||1)<=L).map(t=>`<button class="theme" style="background:${t.color}" data-id="${t.id}">
+   <span>${t.icon}</span>${t.name}<small class="pct">${topicPct(t)}%</small></button>`).join('')}<button class="theme" style="background:#555" data-id="all"><span>🌈</span>All</button></div>
+   <p class="note">% = words with 2+ stars both ways. ${EXPLAIN}</p>`;
   app.querySelectorAll('.theme').forEach(b=>b.onclick=()=>next(b.dataset.id)); }
-const wordsOf = id => id==='all' ? WORDS : WORDS.filter(w=>w.theme===id);
+const wordsOf = id => id==='all' ? WORDS.filter(w=>(w.level||1)<=curLevel()) : WORDS.filter(w=>w.theme===id);
+const starTxt = (id,d) => '★'.repeat(star(id,d))+'☆'.repeat(3-star(id,d));
 
-function learn(tid, i=0){ if(cur) cur.finish(null,'left');  header(); const ws=wordsOf(tid), w=ws[(i+ws.length)%ws.length]; seen(w.id);
+// mic button helper (shared by Learn and Practice); onRes(ok) with ok=true/false/null
+function micBtn(w, onRes){ const mic=$('#mic'), msg=$('#msg');
+  mic.onclick=()=>{
+    if(!SR){ msg.innerHTML=`<button class="big c5" id="ok">🙋 I said it (self-check)</button>`; $('#ok').onclick=()=>onRes(true,''); return; }
+    const now=Date.now(); if(now-lastTap<800 || recState!=='idle') return; lastTap=now;
+    mic.classList.add('listening'); mic.innerHTML='🎤 Listening…'; msg.textContent=''; t0=Date.now(); status('tap');
+    const reset=()=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Say it'; };
+    try { listen(w,(ok,heard)=>{ reset();
+      if(ok){ msg.innerHTML=`<span class="ok">✔</span>`; ding(true); onRes(true); }
+      else if(ok===false){ msg.innerHTML=`<span class="no">Try again</span><div class="en">heard: ${heard}</div>`; ding(false); setTimeout(()=>say(w.hz,true),400); onRes(false); }
+      else msg.innerHTML = heard==='not-allowed'||heard==='service-not-allowed'
+        ? `<span class="no">Microphone blocked: allow it in Settings › Safari › Microphone</span>`
+        : heard==='cutoff' ? `<span class="no">Mic was cut off: check Siri is on, then tap again</span>`
+        : `<span class="no">Didn't hear you, tap 🎤 to try again</span>`; }); }
+    catch(e){ recState='idle'; cur=null; reset(); status('start failed: '+(e.name||e.message)); msg.innerHTML=`<span class="no">Didn't hear you, tap 🎤 to try again</span>`; } }; }
+
+function learn(tid, i=0){ if(cur) cur.finish(null,'left'); header(); const ws=wordsOf(tid), w=ws[(i+ws.length)%ws.length];
   app.innerHTML = `<div class="card"><div class="pic" id="pic">${w.img}</div><div class="py">${pyHTML(w.py)}</div>
    <div class="hz">${w.hz}</div><div class="en">${w.en}</div>
    <div class="row"><button class="big c1" id="n">🔊</button><button class="big c5" id="s">🐢</button>
@@ -144,41 +182,38 @@ function learn(tid, i=0){ if(cur) cur.finish(null,'left');  header(); const ws=w
   const go = d => learn(tid, (i+d+ws.length)%ws.length);
   $('#n').onclick=$('#pic').onclick=()=>say(w.hz); $('#s').onclick=()=>say(w.hz,true);
   $('#prev').onclick=()=>go(-1); $('#next').onclick=()=>go(1);
-  const mic=$('#mic'), msg=$('#msg');
-  mic.onclick=()=>{
-    if(!SR){ msg.innerHTML=`<button class="big c5" id="ok">🙋 I said it (self-check)</button>`;
-      $('#ok').onclick=()=>{ mark(w.id,true); msg.innerHTML='<span class="ok">✔</span>'; header(); }; return; }
-    const now=Date.now(); if(now-lastTap<800 || recState!=='idle') return; lastTap=now;
-    mic.classList.add('listening'); mic.innerHTML='🎤 Listening…'; msg.textContent=''; t0=Date.now(); status('tap');
-    const reset=()=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Say it'; };
-    try { listen(w,(ok,heard)=>{ reset();
-      if(ok){ mark(w.id,true); header(); msg.innerHTML=`<span class="ok">✔</span>`; ding(true); }
-      else if(ok===false){ msg.innerHTML=`<span class="no">Try again</span><div class="en">heard: ${heard}</div>`; ding(false); setTimeout(()=>say(w.hz,true),400); }
-      else msg.innerHTML = heard==='not-allowed'||heard==='service-not-allowed'
-        ? `<span class="no">Microphone blocked: allow it in Settings › Safari › Microphone</span>`
-        : heard==='cutoff' ? `<span class="no">Mic was cut off: check Siri is on, then tap again</span>`
-        : `<span class="no">Didn't hear you, tap 🎤 to try again</span>`; }); }
-    catch(e){ recState='idle'; cur=null; reset(); status('start failed: '+(e.name||e.message)); msg.innerHTML=`<span class="no">Didn't hear you, tap 🎤 to try again</span>`; } };
+  micBtn(w, ok=>{ if(ok){ mark(w.id,'say',true); header(); } });
   if(!IOS) say(w.hz); }
 
-function pickQ(ws){ const now=Date.now(), P0=P();
-  const due = ws.filter(w=>!P0[w.id] || P0[w.id].due<=now);
-  const pool = due.length ? due : ws;
-  pool.sort((a,b)=>((P0[a.id]||{box:0}).box)-((P0[b.id]||{box:0}).box));
+function pickQ(ws, d){ const now=Date.now();
+  const due = ws.filter(w=>rec0(w.id,d).due<=now), pool = due.length ? due : ws.slice();
+  pool.sort((a,b)=>rec0(a.id,d).box-rec0(b.id,d).box);
   const w = pool[Math.floor(Math.random()*Math.min(4,pool.length))];
-  const others = shuffle(WORDS.filter(x=>x.id!==w.id && x.img!==w.img && x.py!==w.py && (ws.length>=4 ? x.theme===w.theme : true))).slice(0,3);
+  const others = shuffle(WORDS.filter(x=>x.id!==w.id && x.img!==w.img && x.py!==w.py && x.theme===w.theme)).slice(0,3);
   return {w, opts: shuffle([w,...others])}; }
-function quiz(ws, onAnswer, extra=''){ const {w,opts}=pickQ(ws);
+// Listen & tap: hear the word, tap the picture ('hear' stars)
+function quiz(ws, onAnswer, extra=''){ const {w,opts}=pickQ(ws,'hear');
   app.innerHTML = `${extra}<div class="row"><button class="big c1" id="n">🔊</button><button class="big c5" id="s">🐢</button></div>
    <div class="grid">${opts.map(o=>`<button class="choice" data-id="${o.id}">${o.img}</button>`).join('')}</div>
-   <div class="msg" id="msg"></div>`;
-  $('#n').onclick=()=>say(w.hz); $('#s').onclick=()=>say(w.hz,true); if(!IOS) say(w.hz);
+   <div class="msg" id="msg"></div><p class="note">👂 ${starTxt(w.id,'hear')}</p>`;
+  $('#n').onclick=()=>say(w.hz); $('#s').onclick=()=>say(w.hz,true); say(w.hz);
   let done=false;
   app.querySelectorAll('.choice').forEach(b=>b.onclick=()=>{ if(done) return; done=true; const ok=b.dataset.id===w.id;
     b.classList.add(ok?'right':'wrong'); app.querySelector(`[data-id="${w.id}"]`).classList.add('right');
-    $('#msg').innerHTML = (ok?'🎉 ':'💪 ')+`${w.hz} ${pyHTML(w.py)}`; if(!ok) say(w.hz);
+    $('#msg').innerHTML = (ok?'🎉 ':'💪 ')+`${w.hz} ${pyHTML(w.py)}`; ding(ok); if(!ok) setTimeout(()=>say(w.hz),300);
     setTimeout(()=>onAnswer(w,ok), ok?1200:2200); }); }
-function practice(tid){ header(); quiz(wordsOf(tid), (w,ok)=>{ mark(w.id,ok); practice(tid); }); }
+function hearTap(tid){ header(); quiz(withReview(wordsOf(tid)), (w,ok)=>{ mark(w.id,'hear',ok); hearTap(tid); }); }
+// Practice (say): see the picture, say the Mandarin ('say' stars)
+function practice(tid){ if(cur) cur.finish(null,'left'); header(); const {w}=pickQ(withReview(wordsOf(tid)),'say'); let done=false;
+  const next=ok=>{ if(done) return; done=true; mark(w.id,'say',ok); header(); setTimeout(()=>practice(tid), ok?1000:2000); };
+  app.innerHTML = `<div class="card"><div class="pic">${w.img}</div><div class="en">${w.en}</div><p class="note">🗣️ ${starTxt(w.id,'say')}</p>
+   <div class="row"><button class="big c4" id="mic">🎤 Say it</button><button class="big c5" id="show">👀 Show</button></div>
+   <div class="msg" id="msg"></div><div id="srstat" class="srstat"></div></div>`;
+  micBtn(w, ok=>{ if(ok!==null) next(ok); });
+  $('#show').onclick=()=>{ if(cur) cur.finish(null,'left'); say(w.hz);
+    $('#msg').innerHTML=`<div class="hz">${w.hz}</div><div class="py">${pyHTML(w.py)}</div>
+     <div class="row"><button class="big c1" id="y">✔ I knew it</button><button class="big c4" id="x">✖ Not yet</button></div>`;
+    $('#y').onclick=()=>next(true); $('#x').onclick=()=>next(false); }; }
 
 function playSetup(tid){ const sc=S.profiles.map(()=>0); playTurn(tid, sc, 0, 0); }
 function playTurn(tid, sc, turn, round){ const n=S.profiles.length, ROUNDS=5;
@@ -189,7 +224,75 @@ function playTurn(tid, sc, turn, round){ const n=S.profiles.length, ROUNDS=5;
   const p=S.profiles[turn];
   const bar=`<div class="score">${S.profiles.map((q,i)=>`<span class="${i===turn?'cur':''}">${q.av} ${q.name} ${sc[i]}</span>`).join(' · ')}</div>
    <div class="msg">${p.av} ${p.name}!</div>`;
-  quiz(wordsOf(tid), (w,ok)=>{ if(ok) sc[turn]++; const prev=S.cur; S.cur=turn; mark(w.id,ok); S.cur=prev; save();
+  quiz(wordsOf(tid), (w,ok)=>{ if(ok) sc[turn]++; const prev=S.cur; S.cur=turn; mark(w.id,'hear',ok); S.cur=prev; save();
     playTurn(tid, sc, (turn+1)%n, round+1); }, bar); }
 
-$('#homeBtn').onclick=()=>home(); app.innerHTML='<p class="note">Loading…</p>';  // sync.js shows sign-in or home
+// ---- levels & boss games ----
+function level(){ header(); const L=curLevel(), pr=P(), ready=levelReady(L), b=pr.boss[L]||{};
+  app.innerHTML = `<div class="card"><h2>Level ${L} ${pr.passed[L]?'✅ passed':''}</h2>
+   ${THEMES.filter(t=>(t.level||1)===L).map(t=>`<div class="bar"><span>${t.icon} ${t.name}</span><i><b style="width:${topicPct(t)}%;background:${t.color}"></b></i>${topicPct(t)}%</div>`).join('')}
+   <p class="note">Pass: every topic at 80%+ (2+ stars in both Practice and Listen &amp; tap), then beat both boss games.</p>
+   ${L===1?`<div class="row"><button class="big c1" id="b1">📞 Phone Number ${b.phone?'✅':''}</button><button class="big c2" id="b2">🌧️ Number Rain ${b.rain?'✅':''}</button></div>
+   ${ready?'':'<p class="note">🔒 Bosses unlock at 80%. <button class="link" id="any">Try boss anyway</button></p>'}`:'<p class="note">Boss games for this level are coming soon.</p>'}</div>`;
+  if(L!==1) return; const lock=!ready;
+  const en=()=>{ ['#b1','#b2'].forEach(s=>$(s).disabled=false); };
+  if(lock) ['#b1','#b2'].forEach(s=>$(s).disabled=true);
+  $('#b1').onclick=()=>phone(3,3); $('#b2').onclick=()=>rain();
+  if($('#any')) $('#any').onclick=en; }
+function bossWin(k){ const pr=P(), b=pr.boss[1]=pr.boss[1]||{}; b[k]=true; if(b.phone&&b.rain) pr.passed[1]=true; save(); }
+const DIG = ['零','一','二','三','四','五','六','七','八','九','十'];
+const wait = ms => new Promise(r=>setTimeout(r,ms));
+function sayAsync(t){ return new Promise(r=>{ if(!('speechSynthesis' in window)) return r(); speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(t);
+  u.lang='zh-CN'; if(zhVoice) u.voice=zhVoice; u.rate=.8; u.onend=u.onerror=()=>r(); speechSynthesis.speak(u); setTimeout(r,2500); }); }
+let gameId=0; const stopGame=()=>{ gameId++; if(rainT) clearInterval(rainT); rainT=null; };
+function phone(n, lives){ stopGame(); const g=gameId, code=Array.from({length:n},()=>Math.floor(Math.random()*10)); let got=[];
+  app.innerHTML=`<div class="card"><h2>📞 Phone Number: ${n} digits · ${'❤️'.repeat(lives)}</h2><div class="hz" id="typed">${'_ '.repeat(n)}</div>
+   <div class="keypad">${[1,2,3,4,5,6,7,8,9,0].map(d=>`<button class="choice" data-d="${d}">${d}</button>`).join('')}</div>
+   <div class="row"><button class="big c1" id="play">🔊 Play</button></div><div class="msg" id="msg"></div></div>`;
+  const play=async()=>{ for(const d of code){ if(g!==gameId) return; await sayAsync(DIG[d]); await wait(350); } };
+  $('#play').onclick=play; play();
+  app.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{ if(g!==gameId) return; got.push(+b.dataset.d);
+    $('#typed').textContent=got.join(' ')+' _'.repeat(n-got.length);
+    const i=got.length-1;
+    if(got[i]!==code[i]){ stopGame(); ding(false); $('#msg').innerHTML=`<span class="no">It was ${code.join(' ')}</span>`;
+      return setTimeout(()=> lives>1 ? phone(n,lives-1) : over('📞 Out of lives', ()=>phone(3,3)), 2200); }
+    if(got.length===n){ stopGame(); ding(true);
+      if(n>=7){ bossWin('phone'); return over('🎉 Phone Number cleared!', ()=>phone(3,3), true); }
+      $('#msg').innerHTML='<span class="ok">✔</span>'; setTimeout(()=>phone(n+1,lives),1200); } }); }
+function over(t, again, win){ app.innerHTML=`<div class="card"><div class="pic">${win?'🏆':'💪'}</div><h2>${t}</h2>${P().passed[1]?'<h2>⭐ Level 1 passed!</h2>':''}
+  <div class="row"><button class="big c1" id="ag">🔁 Again</button><button class="big c2" id="lv">🏆 Level</button></div></div>`;
+  $('#ag').onclick=again; $('#lv').onclick=level; }
+// Number Rain: numbers 0-10 fall; say one (mic) to pop it, or tap the one that was spoken (no mic)
+const NUMW = DIG.map((hz,n)=>({hz, n, py:['líng','yī','èr','sān','sì','wǔ','liù','qī','bā','jiǔ','shí'][n]}));
+const numsIn = t => { const out=new Set(), s=t.toLowerCase();
+  (s.match(/\d+/g)||[]).forEach(d=>out.add(+d)); [...t].forEach(c=>{ const i=DIG.indexOf(c); if(i>=0) out.add(i); if(c==='〇') out.add(0); });
+  const p=STRIP(s).replace(/[^a-z]/g,' '); ['ling','yi','er','san','si','wu','liu','qi','ba','jiu','shi'].forEach((y,i)=>{ if(new RegExp('\\b'+y+'\\b').test(p)) out.add(i); });
+  if(/两/.test(t)) out.add(2); return out; };
+let rainT=null;
+function rain(tap){ stopGame(); const g=gameId; let drops=[], pops=0, miss=0, speed=0.35, tick=0, spoken=null;
+  if(!SR) tap=true;
+  app.innerHTML=`<div class="card"><h2>🌧️ Number Rain ${tap?'(tap)':'(say it)'} · <span id="sc">0</span>/10 · <span id="lv">❤️❤️❤️</span></h2>
+   <div id="sky" class="sky"></div><div class="row">${tap?'<button class="big c1" id="rp">🔊</button>':'<button class="big c4" id="mic">🎤 Listen</button>'}
+   ${tap?'':'<button class="link" id="tp">Mic not working? Tap mode</button>'}</div><div class="msg" id="msg"></div><div id="srstat" class="srstat"></div></div>`;
+  const sky=$('#sky'), H=()=>sky.clientHeight||360;
+  const end=win=>{ stopGame(); if(cur) cur.finish(null,'left'); if(win) bossWin('rain'); over(win?'🎉 Number Rain cleared!':'🌧️ 3 misses', ()=>rain(tap), win); };
+  const pop=d=>{ d.el.classList.add('pop'); setTimeout(()=>d.el.remove(),300); drops=drops.filter(x=>x!==d); pops++; $('#sc').textContent=pops; ding(true); if(pops>=10) end(true); };
+  const add=()=>{ const n=Math.floor(Math.random()*11), el=document.createElement('button'); el.className='drop'; el.textContent=n;
+    el.style.left=(5+Math.random()*75)+'%'; sky.appendChild(el); const d={n,el,y:0}; drops.push(d);
+    if(tap){ spoken=d; say(DIG[n]); el.onclick=()=>{ if(d===spoken) pop(d); else { miss++; $('#lv').textContent='❤️'.repeat(Math.max(0,3-miss)); ding(false); if(miss>=3) end(false); } }; } };
+  rainT=setInterval(()=>{ if(g!==gameId) return; tick++;
+    if(!drops.length || (!tap && tick%Math.max(40,120-pops*8)===0)) add();
+    speed=0.35+pops*0.06;
+    drops.slice().forEach(d=>{ d.y+=speed; d.el.style.top=d.y+'px';
+      if(d.y>H()-60){ d.el.remove(); drops=drops.filter(x=>x!==d); miss++; $('#lv').textContent='❤️'.repeat(Math.max(0,3-miss)); if(miss>=3) end(false); } }); }, 30);
+  if(tap){ $('#rp').onclick=()=>spoken&&say(DIG[spoken.n]); return; }
+  $('#tp').onclick=()=>rain(true);
+  const mic=$('#mic'); mic.onclick=()=>{ if(recState!=='idle') return; t0=Date.now(); status('tap'); hear(); };
+  // continuous loop: one fresh recognizer per attempt (v10 iOS-safe listen()); any recognised number pops the matching drop
+  const any={hz:'\u0000',py:'zzzz'};
+  function hear(){ if(g!==gameId) return; mic.classList.add('listening'); mic.innerHTML='🎤 Listening…';
+    listen(any,(ok,heard)=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Listen'; if(g!==gameId) return;
+      if(heard==='not-allowed'||heard==='service-not-allowed'||heard==='cutoff'){ $('#msg').innerHTML='<span class="no">Mic unavailable. Use tap mode.</span>'; return; }
+      const ns=numsIn(heard||''); let hit=false; ns.forEach(n=>{ const d=drops.find(x=>x.n===n); if(d){ pop(d); hit=true; } });
+      if(heard && heard!=='no-speech') $('#msg').textContent='heard: '+heard;
+      if(g===gameId) setTimeout(hear, 150); }); } }

@@ -27,13 +27,13 @@ async function pull(uid){
   const prog = {}; pr.forEach(d => prog[d.id] = d.data().words || {});
   const profiles = ps.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b)=>(a.order||0)-(b.order||0));
   cloudIds = new Set(profiles.map(p=>p.id));
-  return { profiles: profiles.map(({order,...p})=>p), prog: profiles.map(p=>prog[p.id]||{}) };
+  return { profiles: profiles.map(({order,...p})=>p), prog: Object.fromEntries(profiles.map(p=>[p.id, prog[p.id]||{}])) };
 }
 async function push(){
   if(!user) return; const S = A.S, uid = user.uid, b = writeBatch(db), ids = new Set();
   S.profiles.forEach((p,i) => { ids.add(p.id);
     b.set(doc(db,'users',uid,'profiles',p.id), {name:p.name, av:p.av, order:i});
-    b.set(doc(db,'users',uid,'progress',p.id), {words: S.prog[i] || {}}); });
+    b.set(doc(db,'users',uid,'progress',p.id), {words: S.prog[p.id] || {}}); });
   cloudIds.forEach(id => { if(!ids.has(id)){ b.delete(doc(db,'users',uid,'profiles',id)); b.delete(doc(db,'users',uid,'progress',id)); } });
   try { await b.commit(); cloudIds = ids; } catch(e){ console.warn('sync failed, kept locally', e.code); }
 }
@@ -45,10 +45,10 @@ async function enterCloud(u){
   try {
     const c = await pull(u.uid);
     if(!c.profiles.length && guest.profiles.length){      // first sign-in: upload this device's users
-      A.S = {cur:0, profiles: guest.profiles.map(p=>({...p})), prog: Object.fromEntries(guest.profiles.map((_,i)=>[i, guest.prog[i]||{}]))};
+      A.S = {cur:0, profiles: guest.profiles.map(p=>({...p})), prog: {...guest.prog}};
       A.save(); await push(); localStorage.removeItem(A.GUEST_KEY);   // moved into the account
     } else if(c.profiles.length){
-      A.S = {cur: Math.min(A.S.cur||0, c.profiles.length-1), profiles:c.profiles, prog:Object.fromEntries(c.prog.map((p,i)=>[i,p]))}; A.save();
+      A.S = {cur: Math.min(A.S.cur||0, c.profiles.length-1), profiles:c.profiles, prog:c.prog}; A.save();
     }
   } catch(e){ console.warn('offline, using cached data', e.code); }
   A.home();
