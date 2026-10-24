@@ -43,19 +43,25 @@ const NUMPY = {'1':'yi','2':'er','3':'san','4':'si','5':'wu','6':'liu','7':'qi',
 let rec = null, recState = 'idle', lastTap = 0, cur = null, t0 = 0;
 const status = t => { const s=document.getElementById('srstat'); if(!s) return;
   const line = ((Date.now()-t0)/1000).toFixed(1)+'s '+t; s.textContent = t==='tap' ? line : (s.textContent ? s.textContent+' → ' : '')+line; };
+// Diagnostics: log any abort/stop/cancel/speak that happens while the mic is active, with the caller.
+const caller = () => ((new Error().stack||'').split('\n')[3]||'').trim().replace(/^at /,'').replace(/\(?https?:\/\/[^/]+\//,'').slice(0,40);
+let allowStop = false;
+if(SR){ ['abort','stop'].forEach(m => { const o = SR.prototype[m]; if(!o) return;
+  SR.prototype[m] = function(){ if(!allowStop && recState!=='idle') status(m+' called by '+caller()); return o.apply(this, arguments); }; }); }
+if('speechSynthesis' in window){ ['cancel','speak'].forEach(m => { const o = speechSynthesis[m].bind(speechSynthesis);
+  speechSynthesis[m] = (...x) => { if(recState!=='idle') status('tts.'+m+' called by '+caller()); return o(...x); }; }); }
 function listen(w, done){
   const target = STRIP(w.py).replace(/[\s']/g,'');
   const match = a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || toPy(a).replace(/\d+/g,d=>NUMPY[d]||d).includes(target);
   let finished=false, restarts=0, startedAt=0, heardAny=false, last=[], silence, settle;
   const c = cur = {};
-  const kill = () => { try{ rec && rec.abort(); }catch(e){} };
   const finish = (ok, heard) => { if(finished || cur!==c) return; finished=true; clearTimeout(silence); clearTimeout(settle);
-    cur=null; recState='idle'; const r=rec; rec=null; if(r){ r.onend=r.onresult=r.onerror=null; try{r.abort();}catch(e){} } done(ok, heard); };
+    cur=null; recState='idle'; const r=rec; rec=null; if(r){ r.onend=r.onresult=r.onerror=null; allowStop=true; try{r.abort();}catch(e){} allowStop=false; } done(ok, heard); };
   c.finish = finish;
   const judge = () => last.length ? finish(last.some(match), last[0]) : finish(null,'no-speech');
   const armSilence = ms => { clearTimeout(silence); silence=setTimeout(()=>{ status('timeout'); judge(); }, ms); };
   function start(){
-    const r = rec = new SR(); r.lang='zh-CN'; r.maxAlternatives=5; r.continuous=true; r.interimResults=true;
+    const r = rec = new SR(); r.lang='zh-CN'; r.maxAlternatives=5; r.continuous=false; r.interimResults = restarts<2;
     r.onstart = () => { status('start'); recState='listening'; startedAt=Date.now(); };
     r.onaudiostart = () => status('audio');
     r.onspeechstart = () => { status('speech'); heardAny=true; armSilence(5000); };
@@ -72,6 +78,7 @@ function listen(w, done){
       const quick = !startedAt || Date.now()-startedAt < 1500;
       if(!heardAny && quick && restarts<2){ restarts++; status('restart '+restarts); startedAt=0; setTimeout(()=>{ if(cur===c) start(); }, 250); return; }
       judge(); };
+    status('start() called (cont=off, interim='+(r.interimResults?'on':'off')+')');
     try { r.start(); } catch(e){ status('start failed: '+(e.name||e.message)); finish(null,'start-failed'); }
   }
   recState='starting';
