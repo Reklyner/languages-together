@@ -35,3 +35,4 @@ main{max-width:900px;margin:auto;padding:16px}
 .link{background:none;box-shadow:none;color:#118ab2;font-size:18px;min-height:40px;text-decoration:underline}
 .err{color:#e63946;font-size:18px;min-height:24px;text-align:center}.note{color:#666;text-align:center}
 body.out #acctBtn,body.out #homeBtn,body.out #who{visibility:hidden}
+.srstat{font-size:13px;color:#999;text-align:center;min-height:16px}.ver{text-align:center;font-size:12px;color:#bbb;padding:8px}

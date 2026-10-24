@@ -36,24 +36,34 @@ const STRIP = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ü
 const CH2PY = {}; WORDS.forEach(w=>{ const sy=w.py.split(' '); if(sy.length===[...w.hz].length) [...w.hz].forEach((c,k)=>CH2PY[c]=STRIP(sy[k])); });
 const toPy = t => [...t].map(c=>CH2PY[c]||NUMPY[c]||c).join('');
 const NUMPY = {'1':'yi','2':'er','3':'san','4':'si','5':'wu','6':'liu','7':'qi','8':'ba','9':'jiu','10':'shi'};
-let rec = null;
+// One recognizer for the whole session (iOS Safari dislikes re-creating it). State guards stop double taps.
+let rec = null, recState = 'idle', lastTap = 0, cur = null;
+const status = t => { const s=document.getElementById('srstat'); if(s) s.textContent = (t==='starting'||!s.textContent) ? t : s.textContent+' → '+t; };
+function getRec(){
+  if(rec) return rec;
+  rec = new SR(); rec.lang='zh-CN'; rec.maxAlternatives=5; rec.interimResults=false; rec.continuous=false;
+  const H = (ev, f) => rec['on'+ev] = e => { status(ev + (e && e.error ? ': '+e.error : '')); if(cur) f(e); };
+  H('start', () => { recState='listening'; cur.arm(6000); });
+  H('audiostart', () => {}); H('speechstart', () => cur.arm(4000));
+  H('speechend', () => cur.arm(2500));            // unreliable on iOS; timeout is the backstop
+  H('result', e => { const alts=[]; for(const res of e.results) for(const a of res) alts.push(a.transcript.replace(/[\s。，！？、.,!?]/g,''));
+    status('result: '+(alts[0]||'')); cur.finish(alts.some(cur.match), alts[0]||''); });
+  H('nomatch', () => cur.finish(null,'no-speech'));
+  H('error', e => cur.finish(null, e.error));
+  H('end', () => setTimeout(()=>cur && cur.finish(null,'no-speech'), 600)); // ended without a result (iOS with no audio)
+  return rec;
+}
 function listen(w, done){
-  if(rec){ try{rec.abort();}catch(e){} rec=null; }
-  speechSynthesis && speechSynthesis.cancel();
-  const r = rec = new SR(); r.lang='zh-CN'; r.maxAlternatives=5; r.interimResults=false; r.continuous=false;
-  let finished=false, timer;
-  const finish = (ok, heard) => { if(finished) return; finished=true; clearTimeout(timer); try{r.stop();}catch(e){} rec=null; done(ok, heard); };
-  const arm = ms => { clearTimeout(timer); timer=setTimeout(()=>finish(null,'no-speech'), ms); };
   const target = STRIP(w.py).replace(/[\s']/g,'');
-  r.onresult = e => { const alts=[]; for(const res of e.results) for(const a of res) alts.push(a.transcript.replace(/[\s。，！？、.,!?]/g,''));
-    const ok = alts.some(a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || toPy(a).replace(/\d+/g,d=>NUMPY[d]||d).includes(target));
-    finish(ok, alts[0]||''); };
-  r.onspeechstart = () => arm(4000);
-  r.onspeechend = () => { try{r.stop();}catch(e){} arm(2500); };   // unreliable on iOS; timeout is the backstop
-  r.onerror = e => finish(null, e.error);
-  r.onend = () => setTimeout(()=>finish(null,'no-speech'), 800);   // ended with no result
-  arm(6000);
-  r.start();   // must run synchronously inside the tap handler for iOS Safari
+  let timer, finished=false;
+  const c = cur = {
+    match: a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || toPy(a).replace(/\d+/g,d=>NUMPY[d]||d).includes(target),
+    arm: ms => { clearTimeout(timer); timer=setTimeout(()=>{ try{rec.stop();}catch(e){} c.finish(null,'no-speech'); }, ms); },
+    finish: (ok, heard) => { if(finished || cur!==c) return; finished=true; clearTimeout(timer); cur=null; recState='idle'; done(ok, heard); } };
+  recState='starting';
+  if('speechSynthesis' in window) speechSynthesis.cancel();
+  getRec().start();                                // synchronous inside the tap (iOS requirement)
+  c.arm(8000);
 }
 
 // ---- progress / spaced repetition (Leitner boxes) ----
@@ -95,11 +105,11 @@ function themes(next){ header();
   app.querySelectorAll('.theme').forEach(b=>b.onclick=()=>next(b.dataset.id)); }
 const wordsOf = id => id==='all' ? WORDS : WORDS.filter(w=>w.theme===id);
 
-function learn(tid, i=0){ header(); const ws=wordsOf(tid), w=ws[(i+ws.length)%ws.length]; seen(w.id);
+function learn(tid, i=0){ if(cur){ cur=null; recState='idle'; try{rec.abort();}catch(e){} } header(); const ws=wordsOf(tid), w=ws[(i+ws.length)%ws.length]; seen(w.id);
   app.innerHTML = `<div class="card"><div class="pic" id="pic">${w.img}</div><div class="py">${pyHTML(w.py)}</div>
    <div class="hz">${w.hz}</div><div class="en">${w.en}</div>
    <div class="row"><button class="big c1" id="n">🔊</button><button class="big c5" id="s">🐢</button>
-   <button class="big c4" id="mic">🎤 Say it</button></div><div class="msg" id="msg"></div>
+   <button class="big c4" id="mic">🎤 Say it</button></div><div class="msg" id="msg"></div><div id="srstat" class="srstat"></div>
    <div class="row"><button class="big c2" id="prev">⬅️</button><button class="big c2" id="next">➡️</button></div></div>
    <p class="legend"><b class="t1">ˉ1</b> <b class="t2">ˊ2</b> <b class="t3">ˇ3</b> <b class="t4">ˋ4</b> <b class="t0">· neutral</b></p>`;
   const go = d => learn(tid, (i+d+ws.length)%ws.length);
@@ -109,15 +119,16 @@ function learn(tid, i=0){ header(); const ws=wordsOf(tid), w=ws[(i+ws.length)%ws
   mic.onclick=()=>{
     if(!SR){ msg.innerHTML=`<button class="big c5" id="ok">🙋 I said it (self-check)</button>`;
       $('#ok').onclick=()=>{ mark(w.id,true); msg.innerHTML='<span class="ok">✔</span>'; header(); }; return; }
-    if(mic.classList.contains('listening')) return;
-    mic.classList.add('listening'); mic.innerHTML='🎤 Listening…'; msg.textContent='';
-    try { listen(w,(ok,heard)=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Say it';
+    const now=Date.now(); if(now-lastTap<800 || recState!=='idle') return; lastTap=now;
+    mic.classList.add('listening'); mic.innerHTML='🎤 Listening…'; msg.textContent=''; status('starting');
+    const reset=()=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Say it'; };
+    try { listen(w,(ok,heard)=>{ reset();
       if(ok){ mark(w.id,true); header(); msg.innerHTML=`<span class="ok">✔</span>`; ding(true); }
       else if(ok===false){ msg.innerHTML=`<span class="no">Try again</span><div class="en">heard: ${heard}</div>`; ding(false); setTimeout(()=>say(w.hz,true),400); }
       else msg.innerHTML = heard==='not-allowed'||heard==='service-not-allowed'
         ? `<span class="no">Microphone blocked: allow it in Settings › Safari › Microphone</span>`
         : `<span class="no">Didn't hear you, tap 🎤 to try again</span>`; }); }
-    catch(e){ mic.classList.remove('listening'); mic.innerHTML='🎤 Say it'; msg.innerHTML=`<span class="no">Didn't hear you, tap 🎤 to try again</span>`; } };
+    catch(e){ recState='idle'; cur=null; reset(); status('start failed: '+(e.name||e.message)); msg.innerHTML=`<span class="no">Didn't hear you, tap 🎤 to try again</span>`; } };
   say(w.hz); }
 
 function pickQ(ws){ const now=Date.now(), P0=P();
