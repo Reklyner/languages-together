@@ -64,7 +64,7 @@ function account(){
     $('#out').onclick = () => signOut(auth); $('#back').onclick = A.home; return; }
   main.innerHTML = `<div class="card auth"><h2>Sign in to sync</h2>
     <p class="note">Use the same account on your iPhone and iPad to share users and progress.</p>
-    <button class="big gbtn" id="g">🇬 Sign in with Google</button><p class="note">or</p>
+    <button class="big gbtn" id="g"><b style="color:#4285f4">G</b> Sign in with Google</button><p class="note">or</p>
     <input id="em" type="email" placeholder="Email" autocomplete="email">
     <input id="pw" type="password" placeholder="Password" autocomplete="current-password">
     <div class="err" id="err"></div>
