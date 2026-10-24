@@ -46,38 +46,44 @@ async function enterCloud(u){
     const c = await pull(u.uid);
     if(!c.profiles.length && guest.profiles.length){      // first sign-in: upload this device's users
       A.S = {cur:0, profiles: guest.profiles.map(p=>({...p})), prog: Object.fromEntries(guest.profiles.map((_,i)=>[i, guest.prog[i]||{}]))};
-      A.save(); await push();
+      A.save(); await push(); localStorage.removeItem(A.GUEST_KEY);   // moved into the account
     } else if(c.profiles.length){
       A.S = {cur: Math.min(A.S.cur||0, c.profiles.length-1), profiles:c.profiles, prog:Object.fromEntries(c.prog.map((p,i)=>[i,p]))}; A.save();
     }
   } catch(e){ console.warn('offline, using cached data', e.code); }
   A.home();
 }
-onAuthStateChanged(auth, u => { if(u) enterCloud(u); else if(user){ user=null; A.load(A.GUEST_KEY); A.home(); } });
+onAuthStateChanged(auth, u => { if(u){ window.signedIn=true; document.body.classList.remove('out'); enterCloud(u); }
+  else { user=null; window.signedIn=false; A.load(A.GUEST_KEY); signIn(); } });
 getRedirectResult(auth).catch(e => console.warn(e.code));
 
-// ---- account screen ----
-function account(){
-  if(user){ main.innerHTML = `<div class="card auth"><h2>Account</h2><p class="note">Signed in as<br><b>${user.email||user.displayName}</b></p>
-    <p class="note">Your users and progress sync to every device you sign in on.</p>
-    <button class="big c4" id="out">Sign out</button><button class="link" id="back">Back</button></div>`;
-    $('#out').onclick = () => signOut(auth); $('#back').onclick = A.home; return; }
-  main.innerHTML = `<div class="card auth"><h2>Sign in to sync</h2>
-    <p class="note">Use the same account on your iPhone and iPad to share users and progress.</p>
-    <button class="big gbtn" id="g"><b style="color:#4285f4">G</b> Sign in with Google</button><p class="note">or</p>
-    <input id="em" type="email" placeholder="Email" autocomplete="email">
-    <input id="pw" type="password" placeholder="Password" autocomplete="current-password">
+// ---- sign-in (required) and account menu ----
+function signIn(mode){ document.body.classList.add('out'); $('#who').textContent='';
+  const form = mode ? `<input id="em" type="email" placeholder="Email" autocomplete="email">
+    <input id="pw" type="password" placeholder="Password" autocomplete="${mode==='up'?'new-password':'current-password'}">
+    <button class="big ${mode==='up'?'c1':'c2'}" id="go">${mode==='up'?'Create account':'Sign in'}</button>` : '';
+  main.innerHTML = `<div class="card auth"><div class="pic" style="font-size:90px">🐼</div><h2>Learn Mandarin Together</h2>
+    <button class="big gbtn" id="g"><b style="color:#4285f4">G</b> Sign in with Google</button>
+    ${mode ? form : '<button class="big c2" id="emb">✉️ Sign in with email</button>'}
     <div class="err" id="err"></div>
-    <button class="big c2" id="in">Sign in</button><button class="big c1" id="up">Create account</button>
-    <button class="link" id="reset">Forgot password?</button><button class="link" id="back">Continue without an account</button></div>`;
-  const err = m => $('#err').textContent = m, em = () => $('#em').value.trim(), pw = () => $('#pw').value;
+    ${mode==='up' ? '<button class="link" id="inl">I already have an account</button>' : '<button class="link" id="upl">Create account</button>'}
+    <button class="link" id="reset">Forgot password?</button></div>`;
+  const err = m => $('#err').textContent = m, em = () => ($('#em')||{value:''}).value.trim(), pw = () => $('#pw').value;
   $('#g').onclick = async () => { err(''); const p = new GoogleAuthProvider();
     try { await signInWithPopup(auth, p); }
     catch(e){ if(['auth/popup-blocked','auth/cancelled-popup-request','auth/operation-not-supported-in-this-environment'].includes(e.code)) signInWithRedirect(auth, p); else err(friendly(e)); } };
-  $('#in').onclick = () => { err(''); signInWithEmailAndPassword(auth, em(), pw()).catch(e => err(friendly(e))); };
-  $('#up').onclick = () => { err(''); createUserWithEmailAndPassword(auth, em(), pw()).catch(e => err(friendly(e))); };
-  $('#reset').onclick = () => { if(!em()) return err('Type your email first.');
+  if($('#emb')) $('#emb').onclick = () => signIn('in');
+  if($('#upl')) $('#upl').onclick = () => signIn('up');
+  if($('#inl')) $('#inl').onclick = () => signIn('in');
+  if($('#go')) $('#go').onclick = () => { err('');
+    (mode==='up' ? createUserWithEmailAndPassword : signInWithEmailAndPassword)(auth, em(), pw()).catch(e => err(friendly(e))); };
+  $('#reset').onclick = () => { if(!em()) return mode ? err('Type your email first.') : signIn('in');
     sendPasswordResetEmail(auth, em()).then(() => err('✔ Reset email sent. Check your inbox.')).catch(e => err(friendly(e))); };
-  $('#back').onclick = A.home;
 }
+window.showSignIn = () => signIn();
+function account(){ if(!user) return signIn();
+  main.innerHTML = `<div class="card auth"><h2>Account</h2><p class="note">Signed in as<br><b>${user.email||user.displayName}</b></p>
+    <p class="note">Your users and progress sync to every device you sign in on.</p>
+    <button class="big c4" id="out">Sign out</button><button class="link" id="back">Back</button></div>`;
+  $('#out').onclick = () => signOut(auth); $('#back').onclick = A.home; }
 $('#acctBtn').onclick = account;

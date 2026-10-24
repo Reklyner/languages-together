@@ -34,3 +34,4 @@ main{max-width:900px;margin:auto;padding:16px}
 .auth .big{width:100%}.gbtn{background:#fff!important;color:#333!important;border:2px solid #ddd!important}
 .link{background:none;box-shadow:none;color:#118ab2;font-size:18px;min-height:40px;text-decoration:underline}
 .err{color:#e63946;font-size:18px;min-height:24px;text-align:center}.note{color:#666;text-align:center}
+body.out #acctBtn,body.out #homeBtn,body.out #who{visibility:hidden}

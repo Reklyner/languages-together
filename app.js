@@ -65,7 +65,7 @@ const stars = () => Object.values(P()).filter(p=>p.box>=3).length;
 
 // ---- screens ----
 function header(){ const p=S.profiles[S.cur]; if(!p){ $('#who').textContent=''; return; } $('#who').textContent = p.av+' ⭐'+stars(); }
-function home(){ if(!S.profiles.length) return addPlayer(true); header();
+function home(){ if(!window.signedIn) return window.showSignIn && window.showSignIn(); if(!S.profiles.length) return addPlayer(true); header();
   app.innerHTML = `<div class="row">${S.profiles.map((p,i)=>`<button class="prof ${i==S.cur?'on':''}" data-i="${i}">
     <span class="av">${p.av}</span><input value="${p.name}" data-i="${i}" aria-label="name"><span class="del" data-i="${i}">✖</span></button>`).join('')}
    <button class="prof add" id="add"><span class="av">➕</span>Add user</button></div>
@@ -151,4 +151,4 @@ function playTurn(tid, sc, turn, round){ const n=S.profiles.length, ROUNDS=5;
   quiz(wordsOf(tid), (w,ok)=>{ if(ok) sc[turn]++; const prev=S.cur; S.cur=turn; mark(w.id,ok); S.cur=prev; save();
     playTurn(tid, sc, (turn+1)%n, round+1); }, bar); }
 
-$('#homeBtn').onclick=home; home();
+$('#homeBtn').onclick=()=>home(); app.innerHTML='<p class="note">Loading…</p>';  // sync.js shows sign-in or home
