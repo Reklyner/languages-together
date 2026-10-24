@@ -1,0 +1,23 @@
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,"PingFang SC","Noto Sans SC",sans-serif;background:#fff8e7;color:#333}
+header{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#ff5d5d;color:#fff}
+header h1{flex:1;margin:0;font-size:28px}#who{font-size:30px}
+button{font:inherit;border:0;border-radius:22px;cursor:pointer;min-height:64px;min-width:64px;box-shadow:0 4px 0 rgba(0,0,0,.18)}
+button:active{transform:translateY(3px);box-shadow:none}.icon{background:#fff;font-size:30px}
+main{max-width:900px;margin:auto;padding:16px}
+.row{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin:12px 0}
+.big{font-size:26px;padding:14px 24px;color:#fff;font-weight:700}
+.prof{background:#fff;font-size:22px;padding:12px;width:150px;border:5px solid transparent}.prof.on{border-color:#ff5d5d}
+.prof .av{font-size:54px;display:block}.prof input{width:100%;font-size:18px;text-align:center;border:1px solid #ddd;border-radius:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:14px}
+.theme{color:#fff;font-size:20px;padding:16px}.theme span{display:block;font-size:56px}
+.card{background:#fff;border-radius:30px;padding:20px;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.1)}
+.pic{font-size:clamp(120px,32vw,200px);line-height:1.1}
+.py{font-size:40px;font-weight:700;margin:8px 0}.py b{margin:0 4px}
+.t1{color:#e63946}.t2{color:#f4a300}.t3{color:#2a9d8f}.t4{color:#3a6fd8}.t0{color:#888}
+.hz{font-size:28px;color:#555}.en{font-size:24px;color:#444;font-weight:600}
+.c1{background:#06d6a0}.c2{background:#118ab2}.c3{background:#9b5de5}.c4{background:#ef476f}.c5{background:#f7b32b}
+.choice{background:#fff;font-size:90px;padding:10px;min-height:150px}
+.right{background:#b7f5c8!important}.wrong{background:#ffc2c2!important}
+.msg{font-size:30px;text-align:center;min-height:44px}.score{font-size:24px;text-align:center}
+.score .cur{font-weight:700;background:#fff;border-radius:12px;padding:2px 8px}
+.legend{text-align:center;font-size:16px}
