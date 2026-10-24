@@ -1,6 +1,6 @@
 const $ = s => document.querySelector(s), app = $('#app');
 const KEY = 'mandarin-family-v1';
-const DEF = {cur:0, profiles:[{name:'Rob',av:'🧔'},{name:'Ava',av:'👧'},{name:'Hannah',av:'👶'}], prog:{}};
+const DEF = {cur:0, profiles:[], prog:{}};
 let S; try { S = JSON.parse(localStorage.getItem(KEY)) || DEF; } catch(e){ S = DEF; }
 S.profiles.forEach((p,i)=>{ S.prog[i] = S.prog[i] || {}; });
 const save = () => localStorage.setItem(KEY, JSON.stringify(S));
@@ -59,30 +59,29 @@ function seen(id){ if(!P()[id]){ P()[id]={box:0,due:0,seen:1}; save(); } }
 const stars = () => Object.values(P()).filter(p=>p.box>=3).length;
 
 // ---- screens ----
-function header(){ const p=S.profiles[S.cur]; $('#who').textContent = p.av+' ⭐'+stars(); }
-function home(){ header();
+function header(){ const p=S.profiles[S.cur]; if(!p){ $('#who').textContent=''; return; } $('#who').textContent = p.av+' ⭐'+stars(); }
+function home(){ if(!S.profiles.length) return addPlayer(true); header();
   app.innerHTML = `<div class="row">${S.profiles.map((p,i)=>`<button class="prof ${i==S.cur?'on':''}" data-i="${i}">
     <span class="av">${p.av}</span><input value="${p.name}" data-i="${i}" aria-label="name"><span class="del" data-i="${i}">✖</span></button>`).join('')}
-   <button class="prof add" id="add"><span class="av">➕</span>Add player</button></div>
+   <button class="prof add" id="add"><span class="av">➕</span>Add user</button></div>
    <div class="row"><button class="big c1" id="mLearn">📚 Learn</button><button class="big c2" id="mPrac">🎯 Practice</button>
    <button class="big c3" id="mPlay">👨‍👧‍👧 Play Together</button></div>`;
   app.querySelectorAll('.prof').forEach(b=>b.onclick=e=>{ if(e.target.tagName==='INPUT') return; S.cur=+b.dataset.i; save(); home(); });
   app.querySelectorAll('.del').forEach(d=>d.onclick=e=>{ e.stopPropagation(); const i=+d.dataset.i;
-    if(S.profiles.length<2) return alert('Keep at least one player.');
-    if(!confirm('Delete '+S.profiles[i].name+' and their progress?')) return;
+        if(!confirm('Delete '+S.profiles[i].name+' and their progress?')) return;
     S.profiles.splice(i,1); const np={}; S.profiles.forEach((_,k)=>np[k]=S.prog[k<i?k:k+1]||{}); S.prog=np;
-    S.cur=Math.min(S.cur>i?S.cur-1:S.cur, S.profiles.length-1); save(); home(); });
-  $('#add').onclick=addPlayer;
+    S.cur=Math.max(0,Math.min(S.cur>i?S.cur-1:S.cur, S.profiles.length-1)); save(); home(); });
+  $('#add').onclick=()=>addPlayer();
   app.querySelectorAll('.prof input').forEach(inp=>inp.onchange=()=>{ S.profiles[inp.dataset.i].name=inp.value.trim()||'?'; save(); });
   $('#mLearn').onclick=()=>themes(learn); $('#mPrac').onclick=()=>themes(practice); $('#mPlay').onclick=()=>themes(playSetup); }
 const AVS=['🧔','👩','👧','👦','👶','🧒','👴','👵','🐼','🐯','🐰','🦄','🐶','🐱','🦊','🐸'];
-function addPlayer(){ let av=AVS[8];
-  app.innerHTML=`<div class="card"><h2>New player</h2><input id="nm" class="nm" placeholder="Name" maxlength="16">
+function addPlayer(first){ let av=AVS[8];
+  app.innerHTML=`<div class="card"><h2>${first?'👋 Welcome! Add a user to start':'New user'}</h2><input id="nm" class="nm" placeholder="Name" maxlength="16">
    <div class="grid avs">${AVS.map(a=>`<button class="choice av1" data-a="${a}">${a}</button>`).join('')}</div>
-   <div class="row"><button class="big c1" id="ok">✔ Add</button><button class="big c4" id="cx">Cancel</button></div></div>`;
+   <div class="row"><button class="big c1" id="ok">✔ Add</button>${first?'':'<button class="big c4" id="cx">Cancel</button>'}</div></div>`;
   const pick=a=>{ av=a; app.querySelectorAll('.av1').forEach(b=>b.classList.toggle('right',b.dataset.a===a)); }; pick(av);
   app.querySelectorAll('.av1').forEach(b=>b.onclick=()=>pick(b.dataset.a));
-  $('#cx').onclick=home;
+  if($('#cx')) $('#cx').onclick=home;
   $('#ok').onclick=()=>{ const n=$('#nm').value.trim(); if(!n) return $('#nm').focus();
     S.profiles.push({name:n,av}); S.cur=S.profiles.length-1; S.prog[S.cur]={}; save(); home(); }; }
 function themes(next){ header();
