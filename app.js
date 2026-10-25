@@ -296,3 +296,4 @@ function rain(tap){ stopGame(); const g=gameId; let drops=[], pops=0, miss=0, sp
       const ns=numsIn(heard||''); let hit=false; ns.forEach(n=>{ const d=drops.find(x=>x.n===n); if(d){ pop(d); hit=true; } });
       if(heard && heard!=='no-speech') $('#msg').textContent='heard: '+heard;
       if(g===gameId) setTimeout(hear, 150); }); } }
+$('#homeBtn').onclick=()=>{ try{speechSynthesis.cancel();}catch(e){} home(); };
