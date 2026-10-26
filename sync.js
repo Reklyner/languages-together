@@ -10,7 +10,7 @@ const firebaseConfig = { apiKey: "AIzaSyDHzrBi3JflMU9oNAejnDVrNQj412s_mUc", auth
   appId: "1:219781169800:web:71253a23535102c795d53d" };
 const fb = initializeApp(firebaseConfig), auth = getAuth(fb), db = getFirestore(fb);
 const A = window.App, $ = s => document.querySelector(s), main = $('#app');
-let user = null, timer = null, cloudIds = new Set();
+let user = null, timer = null, cloudIds = new Set(), progIds = new Set();
 
 const ERR = { 'auth/invalid-email':'That email doesn\'t look right.', 'auth/missing-password':'Please type a password.',
   'auth/weak-password':'Password needs at least 6 characters.', 'auth/email-already-in-use':'That email already has an account. Try Sign in.',
@@ -24,18 +24,19 @@ const friendly = e => ERR[e && e.code] || 'Something went wrong. Please try agai
 const ukey = uid => A.GUEST_KEY + ':' + uid;
 async function pull(uid){
   const [ps, pr] = await Promise.all([getDocs(collection(db,'users',uid,'profiles')), getDocs(collection(db,'users',uid,'progress'))]);
-  const prog = {}; pr.forEach(d => prog[d.id] = d.data().words || {});
+  const prog = {}; pr.forEach(d => prog[d.id] = d.data().words || {}); progIds = new Set(Object.keys(prog));
   const profiles = ps.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b)=>(a.order||0)-(b.order||0));
   cloudIds = new Set(profiles.map(p=>p.id));
-  return { profiles: profiles.map(({order,...p})=>p), prog: Object.fromEntries(profiles.map(p=>[p.id, prog[p.id]||{}])) };
+  return { profiles: profiles.map(({order,...p})=>p), prog };   // App.S setter maps old {pid} docs to {pid}_zh
 }
 async function push(){
-  if(!user) return; const S = A.S, uid = user.uid, b = writeBatch(db), ids = new Set();
+  if(!user) return; const S = A.S, uid = user.uid, b = writeBatch(db), ids = new Set(), pids = new Set();
   S.profiles.forEach((p,i) => { ids.add(p.id);
-    b.set(doc(db,'users',uid,'profiles',p.id), {name:p.name, av:p.av, order:i});
-    b.set(doc(db,'users',uid,'progress',p.id), {words: S.prog[p.id] || {}}); });
-  cloudIds.forEach(id => { if(!ids.has(id)){ b.delete(doc(db,'users',uid,'profiles',id)); b.delete(doc(db,'users',uid,'progress',id)); } });
-  try { await b.commit(); cloudIds = ids; } catch(e){ console.warn('sync failed, kept locally', e.code); }
+    b.set(doc(db,'users',uid,'profiles',p.id), {name:p.name, av:p.av, order:i, ...(p.lang?{lang:p.lang}:{})});
+    Object.keys(S.prog).filter(k=>k.startsWith(p.id+'_')).forEach(k => { pids.add(k); b.set(doc(db,'users',uid,'progress',k), {words: S.prog[k]}); }); });
+  cloudIds.forEach(id => { if(!ids.has(id)) b.delete(doc(db,'users',uid,'profiles',id)); });
+  progIds.forEach(id => { if(!pids.has(id)) b.delete(doc(db,'users',uid,'progress',id)); });   // includes migrated pre-v13 {pid} docs
+  try { await b.commit(); cloudIds = ids; progIds = pids; } catch(e){ console.warn('sync failed, kept locally', e.code); }
 }
 window.onLocalSave = () => { if(!user) return; clearTimeout(timer); timer = setTimeout(push, 1500); };
 
@@ -49,6 +50,7 @@ async function enterCloud(u){
       A.save(); await push(); localStorage.removeItem(A.GUEST_KEY);   // moved into the account
     } else if(c.profiles.length){
       A.S = {cur: Math.min(A.S.cur||0, c.profiles.length-1), profiles:c.profiles, prog:c.prog}; A.save();
+      if(Object.keys(c.prog).some(k=>!k.includes('_'))) push();   // finish moving old Mandarin progress to {pid}_zh
     }
   } catch(e){ console.warn('offline, using cached data', e.code); }
   A.home();
@@ -62,7 +64,7 @@ function signIn(mode){ document.body.classList.add('out'); $('#who').textContent
   const form = mode ? `<input id="em" type="email" placeholder="Email" autocomplete="email">
     <input id="pw" type="password" placeholder="Password" autocomplete="${mode==='up'?'new-password':'current-password'}">
     <button class="big ${mode==='up'?'c1':'c2'}" id="go">${mode==='up'?'Create account':'Sign in'}</button>` : '';
-  main.innerHTML = `<div class="card auth"><div class="pic" style="font-size:90px">🐼</div><h2>Learn Mandarin Together</h2>
+  main.innerHTML = `<div class="card auth"><div class="pic" style="font-size:90px">🐼</div><h2>Languages Together</h2>
     <button class="big gbtn" id="g"><b style="color:#4285f4">G</b> Sign in with Google</button>
     ${mode ? form : '<button class="big c2" id="emb">✉️ Sign in with email</button>'}
     <div class="err" id="err"></div>

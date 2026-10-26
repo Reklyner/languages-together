@@ -1,38 +1,46 @@
 const $ = s => document.querySelector(s), app = $('#app');
 const GUEST_KEY = 'mandarin-family-v1';
 let KEY = GUEST_KEY, S;
+// ---- languages: LANGS[code] from words-*.js; switch with setLang ----
+let LANG, THEMES, WORDS, LEVELS, DIG, NUMS={}, CH2PY={};
+function setLang(c){ LANG=LANGS[c]||LANGS.zh; THEMES=LANG.themes; DIG=LANG.digits;
+  WORDS=THEMES.flatMap(t=>t.words.map(([hz,py,en,img])=>({id:hz,hz,py,en,img,theme:t.id,level:t.level||1})));
+  LEVELS=[...new Set(THEMES.map(t=>t.level||1))]; NUMS={}; DIG.forEach((d,i)=>{ if(i) NUMS[d]=''+i; }); CH2PY={};
+  if(LANG.tones) WORDS.forEach(w=>{ const sy=w.py.split(' '); if(sy.length===[...w.hz].length) [...w.hz].forEach((c,k)=>CH2PY[c]=STRIP(sy[k])); });
+  pickVoice(); document.documentElement.lang='en'; }
 const newId = () => Math.random().toString(36).slice(2,10);
 function load(key){ KEY=key; try { S = JSON.parse(localStorage.getItem(KEY)); } catch(e){ S=null; }
   S = S || {cur:0, profiles:[], prog:{}}; S.prog = S.prog || {}; fixProg(); }
-// progress is keyed by profile id: S.prog[pid] = {w:{wordId:{say:{box,due},hear:{box,due}}}, passed:{}, boss:{}}
+// progress is keyed by profile and language: S.prog[pid+'_'+lang] = {w:{wordId:{say:{box,due},hear:{box,due}}}, passed:{}, boss:{}}
 function fixProg(){ const old=S.prog, np={}, curP=S.profiles[S.cur];
   S.profiles.forEach(p=>{ p.id = p.id || newId(); });
   const conv = o => { if(!o || o.w) return o; const w={}; for(const k in o) w[k] = o[k].say||o[k].hear ? o[k] : {say:{box:o[k].box||0,due:o[k].due||0}}; return {w}; };
   const legacy = Object.keys(old).some(k=>/^\d+$/.test(k) && !S.profiles.some(p=>p.id===k));
-  S.profiles.forEach((p,i)=>{ np[p.id] = conv(old[p.id]) || (legacy && p===curP ? conv(old[i]) : null) || {w:{}};
-    if(legacy && p!==curP) np[p.id]={w:{}};   // old progress was shared: give it to the current user only
-    np[p.id].w=np[p.id].w||{}; np[p.id].passed=np[p.id].passed||{}; np[p.id].boss=np[p.id].boss||{}; });
+  // pre-v13 progress (keyed by profile id only) was all Mandarin: it becomes {pid}_zh
+  S.profiles.forEach((p,i)=>{ const z = p.id+'_zh';
+    np[z] = conv(old[z]) || conv(old[p.id]) || (legacy && p===curP ? conv(old[i]) : null) || {w:{}};
+    Object.keys(LANGS).forEach(l=>{ const k=p.id+'_'+l, o=np[k]=np[k]||conv(old[k])||{w:{}}; o.w=o.w||{}; o.passed=o.passed||{}; o.boss=o.boss||{}; }); });
   S.prog = np; }
 load(GUEST_KEY);
 const save = () => { localStorage.setItem(KEY, JSON.stringify(S)); window.onLocalSave && window.onLocalSave(); };
 // hooks for sync.js (cloud mode); guest mode needs none of this
 window.App = { get S(){return S;}, set S(v){S=v; fixProg();}, load, save:()=>localStorage.setItem(KEY, JSON.stringify(S)), home:()=>home(), GUEST_KEY };
-const P = () => { const p=S.profiles[S.cur]; return p ? (S.prog[p.id] = S.prog[p.id] || {w:{},passed:{},boss:{}}) : {w:{},passed:{},boss:{}}; };
+const P = () => { const p=S.profiles[S.cur], k=p&&p.id+'_'+LANG.code; return p ? (S.prog[k] = S.prog[k] || {w:{},passed:{},boss:{}}) : {w:{},passed:{},boss:{}}; };
 const shuffle = a => a.map(x=>[Math.random(),x]).sort((a,b)=>a[0]-b[0]).map(x=>x[1]);
 
 // ---- tones ----
 const TONES = {1:'āēīōūǖĀĒĪŌŪ',2:'áéíóúǘÁÉÍÓÚ',3:'ǎěǐǒǔǚǍĚǏǑǓ',4:'àèìòùǜÀÈÌÒÙ'};
 const tone = syl => { for (const t in TONES) if ([...syl].some(c=>TONES[t].includes(c))) return t; return 0; };
-const pyHTML = py => py.split(' ').map(s=>`<b class="t${tone(s)}">${s}</b>`).join('');
+const pyHTML = py => !LANG.tones ? `<b class="t0">${py}</b>` : py.split(' ').map(s=>`<b class="t${tone(s)}">${s}</b>`).join('');
 
 // ---- speech ----
 let zhVoice = null;
 const pickVoice = () => { const v = speechSynthesis.getVoices();
-  zhVoice = v.find(x=>/zh[-_]CN/i.test(x.lang)) || v.find(x=>/^zh/i.test(x.lang)) || null; };
+  if(!LANG) return; const L=LANG.locale; zhVoice = v.find(x=>x.lang.replace('_','-').toLowerCase()===L.toLowerCase()) || v.find(x=>x.lang.toLowerCase().startsWith(LANG.code)) || null; };
 if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 function say(text, slow){ if(!('speechSynthesis' in window) || (typeof recState!=='undefined' && recState!=='idle')) return;
   speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text);
-  u.lang='zh-CN'; if(zhVoice) u.voice=zhVoice; u.rate = slow?0.5:0.9; speechSynthesis.speak(u); }
+  u.lang=LANG.locale; if(zhVoice) u.voice=zhVoice; u.rate = slow?0.5:0.9; speechSynthesis.speak(u); }
 let actx;
 const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
 // Release all app audio so iOS can hand the audio session to the mic.
@@ -43,12 +51,10 @@ function ding(good){ if(typeof recState!=='undefined' && recState!=='idle') retu
   o.connect(g); g.connect(actx.destination); const t=actx.currentTime; o.frequency.setValueAtTime(good?660:300,t); if(good) o.frequency.setValueAtTime(990,t+.12);
   g.gain.setValueAtTime(.2,t); g.gain.exponentialRampToValueAtTime(.001,t+.4); o.start(t); o.stop(t+.4);}catch(e){} }
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const NUMS = {'一':'1','二':'2','三':'3','四':'4','五':'5','六':'6','七':'7','八':'8','九':'9','十':'10'};
 // syllable map built from our own word list, for toneless-pinyin matching (handles homophones like 他/她)
 const STRIP = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ü/g,'v').toLowerCase();
-const CH2PY = {}; WORDS.forEach(w=>{ const sy=w.py.split(' '); if(sy.length===[...w.hz].length) [...w.hz].forEach((c,k)=>CH2PY[c]=STRIP(sy[k])); });
-const toPy = t => [...t].map(c=>CH2PY[c]||NUMPY[c]||c).join('');
-const NUMPY = {'1':'yi','2':'er','3':'san','4':'si','5':'wu','6':'liu','7':'qi','8':'ba','9':'jiu','10':'shi'};
+const toPy = t => [...t].map(c=>CH2PY[c]||(/\d/.test(c)?NUMPY(c):c)).join('');
+const NUMPY = d => LANG.digitRom[+d] || d;
 // Speech recognition, tuned for iPad/iPhone Safari:
 // - fresh recognizer per attempt (reusing one after onend is flaky on iOS)
 // - continuous + interim results; we stop it ourselves on a match, a final result, or silence
@@ -65,7 +71,7 @@ if('speechSynthesis' in window){ ['cancel','speak'].forEach(m => { const o = spe
   speechSynthesis[m] = (...x) => { if(recState!=='idle') status('tts.'+m+' called by '+caller()); return o(...x); }; }); }
 function listen(w, done){
   const target = STRIP(w.py).replace(/[\s']/g,'');
-  const match = a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || toPy(a).replace(/\d+/g,d=>NUMPY[d]||d).includes(target);
+  const match = a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || (LANG.tones && toPy(a).replace(/\d+/g,NUMPY).includes(target)) || (!LANG.tones && a.includes(w.hz.replace(/\s/g,'')));
   let finished=false, restarts=0, startedAt=0, heardAny=false, last=[], silence, settle;
   const c = cur = {};
   const finish = (ok, heard) => { if(finished || cur!==c) return; finished=true; clearTimeout(silence); clearTimeout(settle);
@@ -74,7 +80,7 @@ function listen(w, done){
   const judge = () => last.length ? finish(last.some(match), last[0]) : finish(null,'no-speech');
   const armSilence = ms => { clearTimeout(silence); silence=setTimeout(()=>{ status('timeout'); judge(); }, ms); };
   function start(){
-    const r = rec = new SR(); r.lang='zh-CN'; r.maxAlternatives=5; r.continuous=false; r.interimResults = restarts<2;
+    const r = rec = new SR(); r.lang=LANG.locale; r.maxAlternatives=5; r.continuous=false; r.interimResults = restarts<2;
     r.onstart = () => { status('start'); recState='listening'; startedAt=Date.now(); };
     r.onaudiostart = () => status('audio');
     r.onspeechstart = () => { status('speech'); heardAny=true; armSilence(5000); };
@@ -112,7 +118,6 @@ function seen(){}
 const star = (id,d) => Math.min(3, rec0(id,d).box);
 const stars = () => Object.values(P().w).reduce((n,w)=>n+Math.min(3,(w.say||{}).box||0)+Math.min(3,(w.hear||{}).box||0),0);
 const EXPLAIN = 'Stars: 1 per correct answer in Practice, 3 = mastered; a miss drops one.';
-const LEVELS = [...new Set(THEMES.map(t=>t.level||1))];
 const topicPct = t => { const ws=wordsOf(t.id); return Math.round(100*ws.filter(w=>star(w.id,'say')>=2&&star(w.id,'hear')>=2).length/ws.length); };
 const levelReady = L => THEMES.filter(t=>(t.level||1)===L).every(t=>topicPct(t)>=80);
 const curLevel = () => LEVELS.find(L=>!P().passed[L]) || LEVELS[LEVELS.length-1];
@@ -121,23 +126,29 @@ function withReview(ws){ const L=curLevel(), old=WORDS.filter(w=>(w.level||1)<L)
   return ws.concat(shuffle(old).slice(0, Math.ceil(ws.length/3))); }
 
 // ---- screens ----
-function header(){ const p=S.profiles[S.cur]; if(!p){ $('#who').textContent=''; return; } $('#who').textContent = p.av+' ⭐'+stars(); $('#who').title=EXPLAIN; }
-function home(){ if(cur) cur.finish(null,'left'); stopGame(); if(!window.signedIn) return window.showSignIn && window.showSignIn(); if(!S.profiles.length) return addPlayer(true); header();
+function header(){ const p=S.profiles[S.cur]; if(!p){ $('#who').textContent=''; return; } $('#who').textContent = LANG.flag+' '+p.av+' ⭐'+stars(); $('#who').title=EXPLAIN; }
+function home(){ if(cur) cur.finish(null,'left'); stopGame(); if(!window.signedIn) return window.showSignIn && window.showSignIn(); if(!S.profiles.length) return addPlayer(true);
+  const pr=S.profiles[S.cur]; if(!pr.lang) return langPick(); setLang(pr.lang); header();
   app.innerHTML = `<div class="row">${S.profiles.map((p,i)=>`<button class="prof ${i==S.cur?'on':''}" data-i="${i}">
     <span class="av">${p.av}</span><input value="${p.name}" data-i="${i}" aria-label="name"><span class="del" data-i="${i}">✖</span></button>`).join('')}
    <button class="prof add" id="add"><span class="av">➕</span>Add user</button></div>
    <div class="row"><button class="big c1" id="mLearn">📚 Learn</button><button class="big c2" id="mPrac">🎯 Practice (say)</button>
    <button class="big c5" id="mHear">👂 Listen &amp; tap</button><button class="big c3" id="mPlay">👨‍👧‍👧 Play Together</button>
-   <button class="big c4" id="mLvl">🏆 Level ${curLevel()}</button></div><p class="note">${EXPLAIN}</p>`;
+   <button class="big c4" id="mLvl">🏆 Level ${curLevel()}</button></div>
+   <div class="row"><button class="big c2" id="mLang">${LANG.flag} ${LANG.name} · change language</button></div><p class="note">${EXPLAIN}</p>`;
   app.querySelectorAll('.prof').forEach(b=>b.onclick=e=>{ if(e.target.tagName==='INPUT') return; S.cur=+b.dataset.i; save(); home(); });
   app.querySelectorAll('.del').forEach(d=>d.onclick=e=>{ e.stopPropagation(); const i=+d.dataset.i;
     if(!confirm('Delete '+S.profiles[i].name+' and their progress?')) return;
-    delete S.prog[S.profiles[i].id]; S.profiles.splice(i,1);
+    Object.keys(S.prog).forEach(k=>{ if(k.startsWith(S.profiles[i].id+'_')) delete S.prog[k]; }); S.profiles.splice(i,1);
     S.cur=Math.max(0,Math.min(S.cur>i?S.cur-1:S.cur, S.profiles.length-1)); save(); home(); });
   $('#add').onclick=()=>addPlayer();
   app.querySelectorAll('.prof input').forEach(inp=>inp.onchange=()=>{ S.profiles[inp.dataset.i].name=inp.value.trim()||'?'; save(); });
   $('#mLearn').onclick=()=>themes(learn); $('#mPrac').onclick=()=>themes(practice); $('#mHear').onclick=()=>themes(hearTap);
-  $('#mPlay').onclick=()=>themes(playSetup); $('#mLvl').onclick=level; }
+  $('#mPlay').onclick=()=>themes(playSetup); $('#mLvl').onclick=level; $('#mLang').onclick=langPick; }
+function langPick(){ const p=S.profiles[S.cur]; $('#who').textContent=p.av+' '+p.name;
+  app.innerHTML=`<div class="card"><h2>${p.name}, what are you learning?</h2><div class="row">${Object.values(LANGS).map(l=>
+   `<button class="big c1 lang" data-l="${l.code}">${l.flag} ${l.name}<br><small>${l.native}</small></button>`).join('')}</div></div>`;
+  app.querySelectorAll('.lang').forEach(b=>b.onclick=()=>{ p.lang=b.dataset.l; save(); home(); }); }
 const AVS=['🧔','👩','👧','👦','👶','🧒','👴','👵','🐼','🐯','🐰','🦄','🐶','🐱','🦊','🐸'];
 function addPlayer(first){ let av=AVS[8];
   app.innerHTML=`<div class="card"><h2>${first?'👋 Welcome! Add a user to start':'New user'}</h2><input id="nm" class="nm" placeholder="Name" maxlength="16">
@@ -147,7 +158,7 @@ function addPlayer(first){ let av=AVS[8];
   app.querySelectorAll('.av1').forEach(b=>b.onclick=()=>pick(b.dataset.a));
   if($('#cx')) $('#cx').onclick=home;
   $('#ok').onclick=()=>{ const n=$('#nm').value.trim(); if(!n) return $('#nm').focus();
-    const id=newId(); S.profiles.push({name:n,av,id}); S.cur=S.profiles.length-1; S.prog[id]={w:{},passed:{},boss:{}}; save(); home(); }; }
+    const id=newId(); S.profiles.push({name:n,av,id}); S.cur=S.profiles.length-1; fixProg(); save(); home(); }; }
 function themes(next){ header(); const L=curLevel();
   app.innerHTML = `<div class="grid">${THEMES.filter(t=>(t.level||1)<=L).map(t=>`<button class="theme" style="background:${t.color}" data-id="${t.id}">
    <span>${t.icon}</span>${t.name}<small class="pct">${topicPct(t)}%</small></button>`).join('')}<button class="theme" style="background:#555" data-id="all"><span>🌈</span>All</button></div>
@@ -178,7 +189,7 @@ function learn(tid, i=0){ if(cur) cur.finish(null,'left'); header(); const ws=wo
    <div class="row"><button class="big c1" id="n">🔊</button><button class="big c5" id="s">🐢</button>
    <button class="big c4" id="mic">🎤 Say it</button></div><div class="msg" id="msg"></div><div id="srstat" class="srstat"></div>
    <div class="row"><button class="big c2" id="prev">⬅️</button><button class="big c2" id="next">➡️</button></div></div>
-   <p class="legend"><b class="t1">ˉ1</b> <b class="t2">ˊ2</b> <b class="t3">ˇ3</b> <b class="t4">ˋ4</b> <b class="t0">· neutral</b></p>`;
+   ${LANG.tones?`<p class="legend"><b class="t1">ˉ1</b> <b class="t2">ˊ2</b> <b class="t3">ˇ3</b> <b class="t4">ˋ4</b> <b class="t0">· neutral</b></p>`:''}`;
   const go = d => learn(tid, (i+d+ws.length)%ws.length);
   $('#n').onclick=$('#pic').onclick=()=>say(w.hz); $('#s').onclick=()=>say(w.hz,true);
   $('#prev').onclick=()=>go(-1); $('#next').onclick=()=>go(1);
@@ -203,7 +214,7 @@ function quiz(ws, onAnswer, extra=''){ const {w,opts}=pickQ(ws,'hear');
     $('#msg').innerHTML = (ok?'🎉 ':'💪 ')+`${w.hz} ${pyHTML(w.py)}`; ding(ok); if(!ok) setTimeout(()=>say(w.hz),300);
     setTimeout(()=>onAnswer(w,ok), ok?1200:2200); }); }
 function hearTap(tid){ header(); quiz(withReview(wordsOf(tid)), (w,ok)=>{ mark(w.id,'hear',ok); hearTap(tid); }); }
-// Practice (say): see the picture, say the Mandarin ('say' stars)
+// Practice (say): see the picture, say the word ('say' stars)
 function practice(tid){ if(cur) cur.finish(null,'left'); header(); const {w}=pickQ(withReview(wordsOf(tid)),'say'); let done=false;
   const next=ok=>{ if(done) return; done=true; mark(w.id,'say',ok); header(); setTimeout(()=>practice(tid), ok?1000:2000); };
   app.innerHTML = `<div class="card"><div class="pic">${w.img}</div><div class="en">${w.en}</div><p class="note">🗣️ ${starTxt(w.id,'say')}</p>
@@ -240,10 +251,9 @@ function level(){ header(); const L=curLevel(), pr=P(), ready=levelReady(L), b=p
   $('#b1').onclick=()=>phone(3,3); $('#b2').onclick=()=>rain();
   if($('#any')) $('#any').onclick=en; }
 function bossWin(k){ const pr=P(), b=pr.boss[1]=pr.boss[1]||{}; b[k]=true; if(b.phone&&b.rain) pr.passed[1]=true; save(); }
-const DIG = ['零','一','二','三','四','五','六','七','八','九','十'];
 const wait = ms => new Promise(r=>setTimeout(r,ms));
 function sayAsync(t){ return new Promise(r=>{ if(!('speechSynthesis' in window)) return r(); speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(t);
-  u.lang='zh-CN'; if(zhVoice) u.voice=zhVoice; u.rate=.8; u.onend=u.onerror=()=>r(); speechSynthesis.speak(u); setTimeout(r,2500); }); }
+  u.lang=LANG.locale; if(zhVoice) u.voice=zhVoice; u.rate=.8; u.onend=u.onerror=()=>r(); speechSynthesis.speak(u); setTimeout(r,2500); }); }
 let gameId=0; const stopGame=()=>{ gameId++; if(rainT) clearInterval(rainT); rainT=null; };
 function phone(n, lives){ stopGame(); const g=gameId, code=Array.from({length:n},()=>Math.floor(Math.random()*10)); let got=[];
   app.innerHTML=`<div class="card"><h2>📞 Phone Number: ${n} digits · ${'❤️'.repeat(lives)}</h2><div class="hz" id="typed">${'_ '.repeat(n)}</div>
@@ -263,10 +273,10 @@ function over(t, again, win){ app.innerHTML=`<div class="card"><div class="pic">
   <div class="row"><button class="big c1" id="ag">🔁 Again</button><button class="big c2" id="lv">🏆 Level</button></div></div>`;
   $('#ag').onclick=again; $('#lv').onclick=level; }
 // Number Rain: numbers 0-10 fall; say one (mic) to pop it, or tap the one that was spoken (no mic)
-const NUMW = DIG.map((hz,n)=>({hz, n, py:['líng','yī','èr','sān','sì','wǔ','liù','qī','bā','jiǔ','shí'][n]}));
 const numsIn = t => { const out=new Set(), s=t.toLowerCase();
   (s.match(/\d+/g)||[]).forEach(d=>out.add(+d)); [...t].forEach(c=>{ const i=DIG.indexOf(c); if(i>=0) out.add(i); if(c==='〇') out.add(0); });
-  const p=STRIP(s).replace(/[^a-z]/g,' '); ['ling','yi','er','san','si','wu','liu','qi','ba','jiu','shi'].forEach((y,i)=>{ if(new RegExp('\\b'+y+'\\b').test(p)) out.add(i); });
+  if(LANG.code==='ko' && /공/.test(t)) out.add(0); if(!LANG.tones) return out;
+  const p=STRIP(s).replace(/[^a-z]/g,' '); LANG.digitRom.forEach((y,i)=>{ if(new RegExp('\\b'+y+'\\b').test(p)) out.add(i); });
   if(/两/.test(t)) out.add(2); return out; };
 let rainT=null;
 function rain(tap){ stopGame(); const g=gameId; let drops=[], pops=0, miss=0, speed=0.35, tick=0, spoken=null;
@@ -297,3 +307,4 @@ function rain(tap){ stopGame(); const g=gameId; let drops=[], pops=0, miss=0, sp
       if(heard && heard!=='no-speech') $('#msg').textContent='heard: '+heard;
       if(g===gameId) setTimeout(hear, 150); }); } }
 $('#homeBtn').onclick=()=>{ try{speechSynthesis.cancel();}catch(e){} home(); };
+setLang('zh');

@@ -1,5 +1,7 @@
 // pinyin syllables separated by spaces; tone read from diacritics (none = neutral)
-const THEMES = [
+(window.LANGS=window.LANGS||{}).zh = {code:'zh', name:'Mandarin', native:'中文', flag:'🇨🇳', locale:'zh-CN', rom:'Pinyin', script:'Characters', tones:true,
+ digits:['零','一','二','三','四','五','六','七','八','九','十'], digitRom:['ling','yi','er','san','si','wu','liu','qi','ba','jiu','shi'],
+ themes:[
  {level:1,id:'common',name:'Most Common',icon:'⭐',color:'#e63946',words:[
   ['我','wǒ','I / me','🙋'],['你','nǐ','you','🫵'],['他','tā','he / him','👨'],['她','tā','she / her','👩'],['我们','wǒ men','we / us','👨‍👩‍👧'],
   ['的','de','\'s (of)','🔗'],['这','zhè','this','👇'],['那','nà','that','👉'],['有','yǒu','have','🎁'],['没有','méi yǒu','don\'t have','🙅'],
@@ -43,5 +45,4 @@ const THEMES = [
  {level:1,id:'home',name:'Home',icon:'🏠',color:'#fb8500',words:[
   ['房子','fáng zi','house','🏠'],['门','mén','door','🚪'],['床','chuáng','bed','🛏️'],['椅子','yǐ zi','chair','🪑'],
   ['电视','diàn shì','TV','📺'],['书','shū','book','📖'],['杯子','bēi zi','cup','🥤'],['灯','dēng','lamp','💡'],['车','chē','car','🚗']]}
-];
-const WORDS = THEMES.flatMap(t => t.words.map(([hz,py,en,img]) => ({id:hz,hz,py,en,img,theme:t.id,level:t.level})));
+]};
