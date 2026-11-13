@@ -71,11 +71,11 @@ if('speechSynthesis' in window){ ['cancel','speak'].forEach(m => { const o = spe
   speechSynthesis[m] = (...x) => { if(recState!=='idle') status('tts.'+m+' called by '+caller()); return o(...x); }; }); }
 function listen(w, done){
   const target = STRIP(w.py).replace(/[\s']/g,'');
-  const match = a => a.includes(w.hz) || (NUMS[w.hz] && a.includes(NUMS[w.hz])) || (LANG.tones && toPy(a).replace(/\d+/g,NUMPY).includes(target)) || (!LANG.tones && a.includes(w.hz.replace(/\s/g,'')));
+  const match = a => a.includes(w.hz) || (NUMS[w.hz] && heardNum(a, NUMS[w.hz], LANG)) || (LANG.tones && toPy(a).replace(/\d+/g,NUMPY).includes(target)) || (!LANG.tones && a.includes(w.hz.replace(/\s/g,'')));
   let finished=false, restarts=0, startedAt=0, heardAny=false, last=[], silence, settle;
   const c = cur = {};
   const finish = (ok, heard) => { if(finished || cur!==c) return; finished=true; clearTimeout(silence); clearTimeout(settle);
-    cur=null; recState='idle'; const r=rec; rec=null; if(r){ r.onend=r.onresult=r.onerror=null; allowStop=true; try{r.abort();}catch(e){} allowStop=false; } done(ok, heard); };
+    cur=null; recState='idle'; const r=rec; rec=null; if(r){ r.onend=r.onresult=r.onerror=null; allowStop=true; try{r.abort();}catch(e){} allowStop=false; } done(ok, heard, last.slice()); };
   c.finish = finish;
   const judge = () => last.length ? finish(last.some(match), last[0]) : finish(null,'no-speech');
   const armSilence = ms => { clearTimeout(silence); silence=setTimeout(()=>{ status('timeout'); judge(); }, ms); };
@@ -273,11 +273,7 @@ function over(t, again, win){ app.innerHTML=`<div class="card"><div class="pic">
   <div class="row"><button class="big c1" id="ag">🔁 Again</button><button class="big c2" id="lv">🏆 Level</button></div></div>`;
   $('#ag').onclick=again; $('#lv').onclick=level; }
 // Number Rain: numbers 0-10 fall; say one (mic) to pop it, or tap the one that was spoken (no mic)
-const numsIn = t => { const out=new Set(), s=t.toLowerCase();
-  (s.match(/\d+/g)||[]).forEach(d=>out.add(+d)); [...t].forEach(c=>{ const i=DIG.indexOf(c); if(i>=0) out.add(i); if(c==='〇') out.add(0); });
-  if(LANG.code==='ko' && /공/.test(t)) out.add(0); if(!LANG.tones) return out;
-  const p=STRIP(s).replace(/[^a-z]/g,' '); LANG.digitRom.forEach((y,i)=>{ if(new RegExp('\\b'+y+'\\b').test(p)) out.add(i); });
-  if(/两/.test(t)) out.add(2); return out; };
+// numsIn(text, LANG) lives in nums.js (digits, full-width, hanzi, homophones, pinyin, Hangul)
 let rainT=null;
 function rain(tap){ stopGame(); const g=gameId; let drops=[], pops=0, miss=0, speed=0.35, tick=0, spoken=null;
   if(!SR) tap=true;
@@ -301,9 +297,11 @@ function rain(tap){ stopGame(); const g=gameId; let drops=[], pops=0, miss=0, sp
   // continuous loop: one fresh recognizer per attempt (v10 iOS-safe listen()); any recognised number pops the matching drop
   const any={hz:'\u0000',py:'zzzz'};
   function hear(){ if(g!==gameId) return; mic.classList.add('listening'); mic.innerHTML='🎤 Listening…';
-    listen(any,(ok,heard)=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Listen'; if(g!==gameId) return;
+    listen(any,(ok,heard,alts)=>{ mic.classList.remove('listening'); mic.innerHTML='🎤 Listen'; if(g!==gameId) return;
       if(heard==='not-allowed'||heard==='service-not-allowed'||heard==='cutoff'){ $('#msg').innerHTML='<span class="no">Mic unavailable. Use tap mode.</span>'; return; }
-      const ns=numsIn(heard||''); let hit=false; ns.forEach(n=>{ const d=drops.find(x=>x.n===n); if(d){ pop(d); hit=true; } });
+      // first alternative that names a falling number wins; each number in it pops one matching drop
+      let hit=false; for(const a of [].concat(alts&&alts.length?alts:[heard||''])){ const ns=numsIn(a,LANG);
+        ns.forEach(n=>{ const d=drops.find(x=>x.n===n); if(d){ pop(d); hit=true; } }); if(hit) break; }
       if(heard && heard!=='no-speech') $('#msg').textContent='heard: '+heard;
       if(g===gameId) setTimeout(hear, 150); }); } }
 $('#homeBtn').onclick=()=>{ try{speechSynthesis.cancel();}catch(e){} home(); };
